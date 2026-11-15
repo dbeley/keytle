@@ -6,7 +6,7 @@ members = ["keytle-core", "keytle"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.83"
+rust-version = "1.85"
 
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
