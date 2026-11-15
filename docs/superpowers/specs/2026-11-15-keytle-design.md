@@ -1,11 +1,8 @@
-# touches — a terminal keyboard-layout trainer
+# keytle — a terminal keyboard-layout trainer
 
 **Status:** design, awaiting approval
 **Date:** 2026-11-15
-**Name:** "touches" is a working title (French *les touches* = the keys; English
-"touch typing"). The repo directory is currently `keytle`. Rename is a packaging
-detail, isolated to the crate names, binary name, config/data paths and flake
-outputs — see "Decisions left to the builder".
+**Name:** `keytle` (chosen). Crate, binary, config and data paths all use `keytle`.
 
 ## Intent
 
@@ -110,7 +107,7 @@ I actually faster than last Tuesday?" without leaving the app.
 
 ### 4. Code structure
 
-- **Workspace: `touches-core` + `touches` (bin)** — picked. The engine, layouts,
+- **Workspace: `keytle-core` + `keytle` (bin)** — picked. The engine, layouts,
   corpora and stats are testable without a terminal, and a future frontend (web, GUI,
   another TUI) can reuse them without reimplementing the pedagogy.
 - Single binary crate — simpler today, but every engine test drags in rendering, and
@@ -130,14 +127,14 @@ I actually faster than last Tuesday?" without leaving the app.
 ### Crate layout
 
 ```
-touches-core/        library
+keytle-core/        library
   layout.rs          TOML layout model, physical positions, emulation translation
   corpus.rs          embedded + user corpora, word/sentence sources
   engine.rs          lesson generation, per-keystroke metrics, confidence, unlocks
   stats.rs           JSONL records, aggregation, series, personal bests
   config.rs          config loading/merging
   data/              embedded layouts + corpora (include_str!)
-touches/             binary
+keytle/             binary
   main.rs            clap CLI: run (default), stats, export, layouts list, doctor
   app.rs             state machine, event loop
   ui/                typing view, stats view, settings, help, results
@@ -211,7 +208,7 @@ source of truth for "can this layout be practised as configured":
   keys on the host are handled by mapping the composed character back to its key.
 - Unreachable keys are drawn greyed out with a `·` legend, excluded from lesson
   generation, excluded from the mean confidence in the unlock rule (so they cannot
-  deadlock progression), and listed by `touches doctor` with the reason.
+  deadlock progression), and listed by `keytle doctor` with the reason.
 - With the five bundled layouts and either bundled host (`qwerty`, `azerty`) the only
   unreachable characters are the rare ones on positions the host board lacks. `doctor`
   prints the count; it is normally zero.
@@ -232,7 +229,7 @@ corpora/fr/sentences.txt
 Embedded defaults: word frequency lists trimmed to ~10k words per language, and a few
 thousand short sentences, chosen from public-domain / permissively licensed sources and
 recorded in `NOTICE`/`data/README.md` with license provenance. User corpora live in
-`$XDG_CONFIG_HOME/touches/corpora/<lang>/…` and are merged with the embedded ones
+`$XDG_CONFIG_HOME/keytle/corpora/<lang>/…` and are merged with the embedded ones
 (union for words, concat for sentences). Corpus files are validated at load with a
 clear error (line number) rather than silently skipped.
 
@@ -246,7 +243,7 @@ rather than switching silently.
 ### Progression engine
 
 State is keyed by **(layout, language)** and persisted to
-`$XDG_DATA_HOME/touches/profiles/<layout>.<lang>.json`. Host layout is *not* part of the
+`$XDG_DATA_HOME/keytle/profiles/<layout>.<lang>.json`. Host layout is *not* part of the
 key: it only changes reachability, which is recomputed each run. Language belongs to the
 practice text and the profile, never to the layout file, so "French on Colemak-DH" and
 "English on Colemak-DH" are two independent progressions.
@@ -397,7 +394,7 @@ be added later without a schema change, but it is not part of this design.
 
 ### Config
 
-`$XDG_CONFIG_HOME/touches/config.toml`, all fields optional with working defaults:
+`$XDG_CONFIG_HOME/keytle/config.toml`, all fields optional with working defaults:
 
 ```toml
 layout = "colemak-dh"
@@ -410,7 +407,7 @@ lesson_words = 20
 target_wpm = 80
 ```
 
-Precedence: CLI flags > config file > defaults. `touches doctor` prints resolved
+Precedence: CLI flags > config file > defaults. `keytle doctor` prints resolved
 config, data paths, corpus counts, and whether the current layout is emulable on the
 configured host (listing unsupported characters).
 
@@ -419,7 +416,7 @@ configured host (listing unsupported characters).
 ```
 flake.nix
   packages.<system>.default      # buildRustPackage, cargoLock
-  packages.<system>.touches
+  packages.<system>.keytle
   overlays.default               # for nixpkgs overlays
   devShells.<system>.default     # rustc, cargo, clippy, rust-analyzer, rustfmt
   checks.<system>                # cargo fmt --check, clippy -D warnings, nextest
@@ -463,9 +460,8 @@ buffer; rendering under 1 ms/frame at 80×24; release profile with `lto = "thin"
 - Chart glyph strategy (braille vs block) and colour palette, including a
   colour-blind-safe variant. Whether the accuracy chart overlays or toggles.
 - Which public-domain corpora to bundle and how aggressively to trim them.
-- Whether `touches export --html` ships in v1 (deferred by default; `export` in v1 writes
+- Whether `keytle export --html` ships in v1 (deferred by default; `export` in v1 writes
   the raw JSONL, or TSV with `--format tsv`, to stdout or a file).
-- Binary/crate/config naming, if "touches" is not chosen.
 - Exact rules for sticky behaviours: whether `tab` (restart) also resets the current
   lesson without recording, and how the 30-minute idle reset is detected when the process
   is suspended rather than exited.
