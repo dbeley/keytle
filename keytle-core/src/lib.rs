@@ -2,4 +2,5 @@
 //!
 //! Everything here is terminal-free and pure so it can be tested without a TTY.
 
+pub mod config;
 pub mod paths;

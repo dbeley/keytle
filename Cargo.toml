@@ -11,6 +11,9 @@ rust-version = "1.85"
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
 keytle-core = { path = "keytle-core" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
 
 [profile.release]
 lto = "thin"

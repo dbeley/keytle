@@ -1,4 +1,5 @@
 use clap::{CommandFactory, Parser, Subcommand};
+use keytle_core::config::Config;
 use keytle_core::paths::{self, Paths};
 
 #[derive(Parser)]
@@ -14,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Print resolved paths, version and terminal type
+    /// Print resolved paths, config, version and terminal type
     Doctor,
 }
 
@@ -31,21 +32,43 @@ fn main() {
 
 fn doctor() {
     let dirs = paths::paths();
+    let config = match Config::load(&dirs.config_file()) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
+    };
     let term = std::env::var_os("TERM").map(|term| term.to_string_lossy().into_owned());
     print!(
         "{}",
-        render(&dirs, env!("CARGO_PKG_VERSION"), term.as_deref())
+        render(&dirs, &config, env!("CARGO_PKG_VERSION"), term.as_deref())
     );
 }
 
 /// The `doctor` report, kept pure so its format can be checked by tests.
-fn render(dirs: &Paths, version: &str, term: Option<&str>) -> String {
-    format!(
-        "keytle {version}\nconfig dir: {}\ndata dir:   {}\nTERM:       {}\n",
+fn render(dirs: &Paths, config: &Config, version: &str, term: Option<&str>) -> String {
+    let mut out = format!(
+        "keytle {version}\n\
+         config dir:  {}\n\
+         data dir:    {}\n\
+         TERM:        {}\n\
+         config file: {}\n\
+         config:\n",
         dirs.config_dir.display(),
         dirs.data_dir.display(),
-        term.unwrap_or("(unset)")
-    )
+        term.unwrap_or("(unset)"),
+        dirs.config_file().display(),
+    );
+    out.push_str(&format!("  layout = \"{}\"\n", config.layout));
+    out.push_str(&format!("  host_layout = \"{}\"\n", config.host_layout));
+    out.push_str(&format!("  language = \"{}\"\n", config.language));
+    out.push_str(&format!("  mode = \"{}\"\n", config.mode));
+    out.push_str(&format!("  emulate = {}\n", config.emulate));
+    out.push_str(&format!("  strict = {}\n", config.strict));
+    out.push_str(&format!("  lesson_words = {}\n", config.lesson_words));
+    out.push_str(&format!("  target_wpm = {}\n", config.target_wpm));
+    out
 }
 
 #[cfg(test)]
@@ -62,15 +85,35 @@ mod tests {
 
     #[test]
     fn doctor_report_names_version_paths_and_term() {
-        let out = render(&dirs(), "0.1.0", Some("xterm-kitty"));
+        let out = render(&dirs(), &Config::default(), "0.1.0", Some("xterm-kitty"));
         assert!(out.contains("keytle 0.1.0"), "{out}");
         assert!(out.contains("/cfg/keytle"), "{out}");
         assert!(out.contains("/data/keytle"), "{out}");
-        assert!(out.contains("TERM:       xterm-kitty"), "{out}");
+        assert!(
+            out.contains("config file: /cfg/keytle/config.toml"),
+            "{out}"
+        );
+        assert!(out.contains("TERM:        xterm-kitty"), "{out}");
     }
 
     #[test]
     fn doctor_report_marks_a_missing_term() {
-        assert!(render(&dirs(), "0.1.0", None).contains("TERM:       (unset)"));
+        let out = render(&dirs(), &Config::default(), "0.1.0", None);
+        assert!(out.contains("TERM:        (unset)"), "{out}");
+    }
+
+    #[test]
+    fn doctor_report_prints_the_resolved_config() {
+        let config = Config {
+            layout: "workman".to_string(),
+            mode: keytle_core::config::Mode::Words,
+            target_wpm: 60.0,
+            ..Config::default()
+        };
+        let out = render(&dirs(), &config, "0.1.0", Some("xterm-kitty"));
+        assert!(out.contains("config:\n  layout = \"workman\"\n"), "{out}");
+        assert!(out.contains("  mode = \"words\"\n"), "{out}");
+        assert!(out.contains("  target_wpm = 60\n"), "{out}");
+        assert!(out.contains("  emulate = true\n"), "{out}");
     }
 }
