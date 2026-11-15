@@ -146,8 +146,8 @@ flake.nix            package, overlay, devShell, checks, home-manager module
 
 ### Layout definition (TOML, user-extensible)
 
-Physical positions are (row, col) on an ANSI 104-key board, so a layout is a mapping
-*from positions to output*, not a picture. This is what makes emulation and
+Physical positions are `(row, col)` on a 5-row ANSI-style board, so a layout is a
+mapping *from positions to output*, not a picture. This is what makes emulation and
 user-defined layouts the same mechanism.
 
 ```toml
