@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["keytle-core", "keytle"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.83"
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+keytle-core = { path = "keytle-core" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

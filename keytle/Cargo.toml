@@ -1,0 +1,11 @@
+[package]
+name = "keytle"
+description = "A fast, offline TUI that teaches keyboard layouts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap.workspace = true
+keytle-core.workspace = true
