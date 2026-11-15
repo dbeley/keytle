@@ -12,6 +12,7 @@
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 /// A physical key position on the board. Rows are 0-based with 0 = numbers,
 /// 1 = top, 2 = home, 3 = bottom and 4 = space row; columns are 0-based within
@@ -191,6 +192,19 @@ pub enum LayoutError {
     Toml(String),
     #[error("bad board geometry: {0}")]
     BadGeometry(String),
+    #[error("no layout has id {id:?}")]
+    UnknownLayout { id: String },
+    #[error("cannot read {}: {source}", path.display())]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("layout file {} declares id {found:?}, not {expected:?}", path.display())]
+    IdMismatch {
+        path: PathBuf,
+        expected: String,
+        found: String,
+    },
 }
 
 /// The file as written, before validation. `base` stays a string here so a

@@ -4,4 +4,5 @@
 
 pub mod config;
 pub mod layout;
+pub mod layouts;
 pub mod paths;

@@ -17,12 +17,26 @@ struct Cli {
 enum Command {
     /// Print resolved paths, config, version and terminal type
     Doctor,
+    /// Inspect the available layouts
+    Layouts {
+        #[command(subcommand)]
+        command: LayoutsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum LayoutsCommand {
+    /// Print every layout id with its name
+    List,
 }
 
 fn main() {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Doctor) => doctor(),
+        Some(Command::Layouts {
+            command: LayoutsCommand::List,
+        }) => layouts_list(),
         None => {
             let mut out = Cli::command();
             let _ = out.print_help();
@@ -44,6 +58,24 @@ fn doctor() {
         "{}",
         render(&dirs, &config, env!("CARGO_PKG_VERSION"), term.as_deref())
     );
+}
+
+/// One line per layout: the id, then its name, then where it came from.
+fn layouts_list() {
+    let dir = paths::paths().layouts_dir();
+    for id in keytle_core::layouts::available(&dir) {
+        match keytle_core::layouts::load(&id, &dir) {
+            Ok(layout) => {
+                let source = if dir.join(format!("{id}.toml")).is_file() {
+                    "user"
+                } else {
+                    "bundled"
+                };
+                println!("{:<12} {} ({source})", layout.id, layout.name);
+            }
+            Err(err) => println!("{:<12} unreadable: {err}", id),
+        }
+    }
 }
 
 /// The `doctor` report, kept pure so its format can be checked by tests.

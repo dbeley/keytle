@@ -1,0 +1,390 @@
+id = "colemak-dh"
+name = "Colemak-DH (ANSI)"
+description = "Colemak with the DH mod: angled index fingers, less same-finger work."
+rows = 5
+row_offset = [0, 1, 1, 1, 2]
+
+[[key]]
+row = 0
+col = 0
+base = "`"
+shift = "~"
+finger = "left-pinky"
+
+[[key]]
+row = 0
+col = 1
+base = "1"
+shift = "!"
+altgr = "¡"
+finger = "left-pinky"
+
+[[key]]
+row = 0
+col = 2
+base = "2"
+shift = "@"
+altgr = "º"
+finger = "left-ring"
+
+[[key]]
+row = 0
+col = 3
+base = "3"
+shift = "#"
+altgr = "ª"
+finger = "left-middle"
+
+[[key]]
+row = 0
+col = 4
+base = "4"
+shift = "$"
+altgr = "¢"
+finger = "left-index"
+
+[[key]]
+row = 0
+col = 5
+base = "5"
+shift = "%"
+altgr = "€"
+finger = "left-index"
+
+[[key]]
+row = 0
+col = 6
+base = "6"
+shift = "^"
+altgr = "ħ"
+finger = "right-index"
+
+[[key]]
+row = 0
+col = 7
+base = "7"
+shift = "&"
+altgr = "ð"
+finger = "right-index"
+
+[[key]]
+row = 0
+col = 8
+base = "8"
+shift = "*"
+altgr = "þ"
+finger = "right-middle"
+
+[[key]]
+row = 0
+col = 9
+base = "9"
+shift = "("
+altgr = "‘"
+finger = "right-ring"
+
+[[key]]
+row = 0
+col = 10
+base = "0"
+shift = ")"
+altgr = "’"
+finger = "right-pinky"
+
+[[key]]
+row = 0
+col = 11
+base = "-"
+shift = "_"
+altgr = "–"
+finger = "right-pinky"
+
+[[key]]
+row = 0
+col = 12
+base = "="
+shift = "+"
+altgr = "×"
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 0
+base = "q"
+shift = "Q"
+altgr = "ä"
+finger = "left-pinky"
+
+[[key]]
+row = 1
+col = 1
+base = "w"
+shift = "W"
+altgr = "å"
+finger = "left-ring"
+
+[[key]]
+row = 1
+col = 2
+base = "f"
+shift = "F"
+altgr = "ã"
+finger = "left-middle"
+
+[[key]]
+row = 1
+col = 3
+base = "p"
+shift = "P"
+altgr = "ø"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 4
+base = "b"
+shift = "B"
+altgr = "˘"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 5
+base = "j"
+shift = "J"
+altgr = "đ"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 6
+base = "l"
+shift = "L"
+altgr = "ł"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 7
+base = "u"
+shift = "U"
+altgr = "ú"
+finger = "right-index"
+
+[[key]]
+row = 1
+col = 8
+base = "y"
+shift = "Y"
+altgr = "ü"
+finger = "right-middle"
+
+[[key]]
+row = 1
+col = 9
+base = ";"
+shift = ":"
+altgr = "ö"
+finger = "right-ring"
+
+[[key]]
+row = 1
+col = 10
+base = "["
+shift = "{"
+altgr = "«"
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 11
+base = "]"
+shift = "}"
+altgr = "»"
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 12
+base = "\\"
+shift = "|"
+altgr = "*"
+finger = "right-pinky"
+
+[[key]]
+row = 2
+col = 0
+base = "a"
+shift = "A"
+altgr = "á"
+finger = "left-pinky"
+
+[[key]]
+row = 2
+col = 1
+base = "r"
+shift = "R"
+altgr = "`"
+finger = "left-ring"
+
+[[key]]
+row = 2
+col = 2
+base = "s"
+shift = "S"
+altgr = "ß"
+finger = "left-middle"
+
+[[key]]
+row = 2
+col = 3
+base = "t"
+shift = "T"
+altgr = "´"
+finger = "left-index"
+
+[[key]]
+row = 2
+col = 4
+base = "g"
+shift = "G"
+altgr = "˛"
+finger = "left-index"
+
+[[key]]
+row = 2
+col = 5
+base = "m"
+shift = "M"
+altgr = "¯"
+finger = "right-index"
+
+[[key]]
+row = 2
+col = 6
+base = "n"
+shift = "N"
+altgr = "ñ"
+finger = "right-index"
+
+[[key]]
+row = 2
+col = 7
+base = "e"
+shift = "E"
+altgr = "é"
+finger = "right-middle"
+
+[[key]]
+row = 2
+col = 8
+base = "i"
+shift = "I"
+altgr = "í"
+finger = "right-ring"
+
+[[key]]
+row = 2
+col = 9
+base = "o"
+shift = "O"
+altgr = "ó"
+finger = "right-pinky"
+
+[[key]]
+row = 2
+col = 10
+base = "'"
+shift = "\""
+altgr = "õ"
+finger = "right-pinky"
+
+[[key]]
+row = 3
+col = 0
+base = "z"
+shift = "Z"
+altgr = "æ"
+finger = "left-pinky"
+
+[[key]]
+row = 3
+col = 1
+base = "x"
+shift = "X"
+altgr = "^"
+finger = "left-ring"
+
+[[key]]
+row = 3
+col = 2
+base = "c"
+shift = "C"
+altgr = "ç"
+finger = "left-middle"
+
+[[key]]
+row = 3
+col = 3
+base = "d"
+shift = "D"
+altgr = "¨"
+finger = "left-index"
+
+[[key]]
+row = 3
+col = 4
+base = "v"
+shift = "V"
+altgr = "œ"
+finger = "left-index"
+
+[[key]]
+row = 3
+col = 5
+base = "k"
+shift = "K"
+altgr = "˚"
+finger = "right-index"
+
+[[key]]
+row = 3
+col = 6
+base = "h"
+shift = "H"
+altgr = "ˇ"
+finger = "right-index"
+
+[[key]]
+row = 3
+col = 7
+base = ","
+shift = "<"
+altgr = "¸"
+finger = "right-middle"
+
+[[key]]
+row = 3
+col = 8
+base = "."
+shift = ">"
+altgr = "˙"
+finger = "right-ring"
+
+[[key]]
+row = 3
+col = 9
+base = "/"
+shift = "?"
+altgr = "¿"
+finger = "right-pinky"
+
+[[key]]
+row = 4
+col = 0
+base = " "
+shift = " "
+finger = "thumb"
+
+[unlock_order]
+default = ["t", "n", "s", "e", "r", "i", "a", "o"]

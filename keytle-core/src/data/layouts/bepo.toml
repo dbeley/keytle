@@ -1,0 +1,377 @@
+id = "bepo"
+name = "Bépo"
+description = "The French ergonomic layout: home row vowels, altgr accents."
+rows = 5
+row_offset = [0, 1, 1, 1, 2]
+
+[[key]]
+row = 0
+col = 0
+base = "$"
+shift = "#"
+altgr = "–"
+finger = "left-pinky"
+
+[[key]]
+row = 0
+col = 1
+base = "\""
+shift = "1"
+altgr = "—"
+finger = "left-pinky"
+
+[[key]]
+row = 0
+col = 2
+base = "«"
+shift = "2"
+altgr = "<"
+finger = "left-ring"
+
+[[key]]
+row = 0
+col = 3
+base = "»"
+shift = "3"
+altgr = ">"
+finger = "left-middle"
+
+[[key]]
+row = 0
+col = 4
+base = "("
+shift = "4"
+altgr = "["
+finger = "left-index"
+
+[[key]]
+row = 0
+col = 5
+base = ")"
+shift = "5"
+altgr = "]"
+finger = "left-index"
+
+[[key]]
+row = 0
+col = 6
+base = "@"
+shift = "6"
+altgr = "^"
+finger = "right-index"
+
+[[key]]
+row = 0
+col = 7
+base = "+"
+shift = "7"
+altgr = "±"
+finger = "right-index"
+
+[[key]]
+row = 0
+col = 8
+base = "-"
+shift = "8"
+altgr = "−"
+finger = "right-middle"
+
+[[key]]
+row = 0
+col = 9
+base = "/"
+shift = "9"
+altgr = "÷"
+finger = "right-ring"
+
+[[key]]
+row = 0
+col = 10
+base = "*"
+shift = "0"
+altgr = "×"
+finger = "right-pinky"
+
+[[key]]
+row = 0
+col = 11
+base = "="
+shift = "°"
+altgr = "≠"
+finger = "right-pinky"
+
+[[key]]
+row = 0
+col = 12
+base = "%"
+shift = "`"
+altgr = "‰"
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 0
+base = "b"
+shift = "B"
+altgr = "|"
+finger = "left-pinky"
+
+[[key]]
+row = 1
+col = 1
+base = "é"
+shift = "É"
+altgr = "´"
+finger = "left-ring"
+
+[[key]]
+row = 1
+col = 2
+base = "p"
+shift = "P"
+altgr = "&"
+finger = "left-middle"
+
+[[key]]
+row = 1
+col = 3
+base = "o"
+shift = "O"
+altgr = "œ"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 4
+base = "è"
+shift = "È"
+altgr = "`"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 5
+base = "^"
+shift = "!"
+altgr = "¡"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 6
+base = "v"
+shift = "V"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 7
+base = "d"
+shift = "D"
+finger = "right-index"
+
+[[key]]
+row = 1
+col = 8
+base = "l"
+shift = "L"
+finger = "right-middle"
+
+[[key]]
+row = 1
+col = 9
+base = "j"
+shift = "J"
+finger = "right-ring"
+
+[[key]]
+row = 1
+col = 10
+base = "z"
+shift = "Z"
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 11
+base = "w"
+shift = "W"
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 12
+base = "ç"
+shift = "Ç"
+finger = "right-pinky"
+
+[[key]]
+row = 2
+col = 0
+base = "a"
+shift = "A"
+altgr = "æ"
+finger = "left-pinky"
+
+[[key]]
+row = 2
+col = 1
+base = "u"
+shift = "U"
+altgr = "ù"
+finger = "left-ring"
+
+[[key]]
+row = 2
+col = 2
+base = "i"
+shift = "I"
+altgr = "¨"
+finger = "left-middle"
+
+[[key]]
+row = 2
+col = 3
+base = "e"
+shift = "E"
+altgr = "€"
+finger = "left-index"
+
+[[key]]
+row = 2
+col = 4
+base = ","
+shift = ";"
+finger = "left-index"
+
+[[key]]
+row = 2
+col = 5
+base = "c"
+shift = "C"
+finger = "right-index"
+
+[[key]]
+row = 2
+col = 6
+base = "t"
+shift = "T"
+finger = "right-index"
+
+[[key]]
+row = 2
+col = 7
+base = "s"
+shift = "S"
+altgr = "ß"
+finger = "right-middle"
+
+[[key]]
+row = 2
+col = 8
+base = "r"
+shift = "R"
+finger = "right-ring"
+
+[[key]]
+row = 2
+col = 9
+base = "n"
+shift = "N"
+altgr = "~"
+finger = "right-pinky"
+
+[[key]]
+row = 2
+col = 10
+base = "m"
+shift = "M"
+finger = "right-pinky"
+
+[[key]]
+row = 3
+col = 0
+base = "à"
+shift = "À"
+altgr = "\\"
+finger = "left-pinky"
+
+[[key]]
+row = 3
+col = 1
+base = "y"
+shift = "Y"
+altgr = "{"
+finger = "left-ring"
+
+[[key]]
+row = 3
+col = 2
+base = "x"
+shift = "X"
+altgr = "}"
+finger = "left-middle"
+
+[[key]]
+row = 3
+col = 3
+base = "."
+shift = ":"
+altgr = "…"
+finger = "left-index"
+
+[[key]]
+row = 3
+col = 4
+base = "k"
+shift = "K"
+altgr = "~"
+finger = "left-index"
+
+[[key]]
+row = 3
+col = 5
+base = "'"
+shift = "?"
+altgr = "¿"
+finger = "right-index"
+
+[[key]]
+row = 3
+col = 6
+base = "q"
+shift = "Q"
+finger = "right-index"
+
+[[key]]
+row = 3
+col = 7
+base = "g"
+shift = "G"
+finger = "right-middle"
+
+[[key]]
+row = 3
+col = 8
+base = "h"
+shift = "H"
+finger = "right-ring"
+
+[[key]]
+row = 3
+col = 9
+base = "f"
+shift = "F"
+finger = "right-pinky"
+
+[[key]]
+row = 4
+col = 0
+base = " "
+shift = " "
+altgr = "_"
+finger = "thumb"
+
+[unlock_order]
+default = ["a", "u", "i", "e", "c", "t", "s", "r"]
+fr = ["é", "è", "à", "ç", "ù"]

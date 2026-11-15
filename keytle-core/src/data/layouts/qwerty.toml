@@ -1,0 +1,296 @@
+id = "qwerty"
+name = "QWERTY (US)"
+description = "The default US layout: what most keyboards ship with."
+rows = 5
+row_offset = [0, 1, 1, 1, 2]
+
+[[key]]
+row = 0
+col = 0
+base = "`"
+finger = "left-pinky"
+
+[[key]]
+row = 0
+col = 1
+base = "1"
+finger = "left-pinky"
+
+[[key]]
+row = 0
+col = 2
+base = "2"
+finger = "left-ring"
+
+[[key]]
+row = 0
+col = 3
+base = "3"
+finger = "left-middle"
+
+[[key]]
+row = 0
+col = 4
+base = "4"
+finger = "left-index"
+
+[[key]]
+row = 0
+col = 5
+base = "5"
+finger = "left-index"
+
+[[key]]
+row = 0
+col = 6
+base = "6"
+finger = "right-index"
+
+[[key]]
+row = 0
+col = 7
+base = "7"
+finger = "right-index"
+
+[[key]]
+row = 0
+col = 8
+base = "8"
+finger = "right-middle"
+
+[[key]]
+row = 0
+col = 9
+base = "9"
+finger = "right-ring"
+
+[[key]]
+row = 0
+col = 10
+base = "0"
+finger = "right-pinky"
+
+[[key]]
+row = 0
+col = 11
+base = "-"
+finger = "right-pinky"
+
+[[key]]
+row = 0
+col = 12
+base = "="
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 0
+base = "q"
+finger = "left-pinky"
+
+[[key]]
+row = 1
+col = 1
+base = "w"
+finger = "left-ring"
+
+[[key]]
+row = 1
+col = 2
+base = "e"
+finger = "left-middle"
+
+[[key]]
+row = 1
+col = 3
+base = "r"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 4
+base = "t"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 5
+base = "y"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 6
+base = "u"
+finger = "left-index"
+
+[[key]]
+row = 1
+col = 7
+base = "i"
+finger = "right-index"
+
+[[key]]
+row = 1
+col = 8
+base = "o"
+finger = "right-middle"
+
+[[key]]
+row = 1
+col = 9
+base = "p"
+finger = "right-ring"
+
+[[key]]
+row = 1
+col = 10
+base = "["
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 11
+base = "]"
+finger = "right-pinky"
+
+[[key]]
+row = 1
+col = 12
+base = "\\"
+finger = "right-pinky"
+
+[[key]]
+row = 2
+col = 0
+base = "a"
+finger = "left-pinky"
+
+[[key]]
+row = 2
+col = 1
+base = "s"
+finger = "left-ring"
+
+[[key]]
+row = 2
+col = 2
+base = "d"
+finger = "left-middle"
+
+[[key]]
+row = 2
+col = 3
+base = "f"
+finger = "left-index"
+
+[[key]]
+row = 2
+col = 4
+base = "g"
+finger = "left-index"
+
+[[key]]
+row = 2
+col = 5
+base = "h"
+finger = "right-index"
+
+[[key]]
+row = 2
+col = 6
+base = "j"
+finger = "right-index"
+
+[[key]]
+row = 2
+col = 7
+base = "k"
+finger = "right-middle"
+
+[[key]]
+row = 2
+col = 8
+base = "l"
+finger = "right-ring"
+
+[[key]]
+row = 2
+col = 9
+base = ";"
+finger = "right-pinky"
+
+[[key]]
+row = 2
+col = 10
+base = "'"
+finger = "right-pinky"
+
+[[key]]
+row = 3
+col = 0
+base = "z"
+finger = "left-pinky"
+
+[[key]]
+row = 3
+col = 1
+base = "x"
+finger = "left-ring"
+
+[[key]]
+row = 3
+col = 2
+base = "c"
+finger = "left-middle"
+
+[[key]]
+row = 3
+col = 3
+base = "v"
+finger = "left-index"
+
+[[key]]
+row = 3
+col = 4
+base = "b"
+finger = "left-index"
+
+[[key]]
+row = 3
+col = 5
+base = "n"
+finger = "right-index"
+
+[[key]]
+row = 3
+col = 6
+base = "m"
+finger = "right-index"
+
+[[key]]
+row = 3
+col = 7
+base = ","
+finger = "right-middle"
+
+[[key]]
+row = 3
+col = 8
+base = "."
+finger = "right-ring"
+
+[[key]]
+row = 3
+col = 9
+base = "/"
+finger = "right-pinky"
+
+[[key]]
+row = 4
+col = 0
+base = " "
+finger = "thumb"
+
+[unlock_order]
+default = ["f", "j", "d", "k", "s", "l", "a", ";"]

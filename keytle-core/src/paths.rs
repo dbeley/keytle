@@ -25,6 +25,11 @@ impl Paths {
         self.config_dir.join("config.toml")
     }
 
+    /// `<config_dir>/layouts`, where user layout files live.
+    pub fn layouts_dir(&self) -> PathBuf {
+        self.config_dir.join("layouts")
+    }
+
     /// `<data_dir>/tests.jsonl`
     pub fn tests_file(&self) -> PathBuf {
         self.data_dir.join("tests.jsonl")
@@ -152,5 +157,6 @@ mod tests {
         };
         assert_eq!(paths.config_file(), PathBuf::from("/cfg/config.toml"));
         assert_eq!(paths.tests_file(), PathBuf::from("/data/tests.jsonl"));
+        assert_eq!(paths.layouts_dir(), PathBuf::from("/cfg/layouts"));
     }
 }
