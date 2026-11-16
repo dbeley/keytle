@@ -1641,7 +1641,10 @@ mod tests {
         app.handle_key(key(KeyCode::Esc), 0);
         assert_eq!(app.screen, Screen::Typing);
         assert!(
-            app.notice.as_deref().unwrap_or_default().contains("settings saved"),
+            app.notice
+                .as_deref()
+                .unwrap_or_default()
+                .contains("settings saved"),
             "leaving says where it wrote: {:?}",
             app.notice
         );
