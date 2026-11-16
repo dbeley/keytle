@@ -8,282 +8,329 @@ row_offset = [0, 1, 1, 1, 2]
 row = 0
 col = 0
 base = "`"
+shift = "~"
 finger = "left-pinky"
 
 [[key]]
 row = 0
 col = 1
 base = "1"
+shift = "!"
 finger = "left-pinky"
 
 [[key]]
 row = 0
 col = 2
 base = "2"
+shift = "@"
 finger = "left-ring"
 
 [[key]]
 row = 0
 col = 3
 base = "3"
+shift = "#"
 finger = "left-middle"
 
 [[key]]
 row = 0
 col = 4
 base = "4"
+shift = "$"
 finger = "left-index"
 
 [[key]]
 row = 0
 col = 5
 base = "5"
+shift = "%"
 finger = "left-index"
 
 [[key]]
 row = 0
 col = 6
 base = "6"
+shift = "^"
 finger = "right-index"
 
 [[key]]
 row = 0
 col = 7
 base = "7"
+shift = "&"
 finger = "right-index"
 
 [[key]]
 row = 0
 col = 8
 base = "8"
+shift = "*"
 finger = "right-middle"
 
 [[key]]
 row = 0
 col = 9
 base = "9"
+shift = "("
 finger = "right-ring"
 
 [[key]]
 row = 0
 col = 10
 base = "0"
+shift = ")"
 finger = "right-pinky"
 
 [[key]]
 row = 0
 col = 11
 base = "-"
+shift = "_"
 finger = "right-pinky"
 
 [[key]]
 row = 0
 col = 12
 base = "="
+shift = "+"
 finger = "right-pinky"
 
 [[key]]
 row = 1
 col = 0
 base = "q"
+shift = "Q"
 finger = "left-pinky"
 
 [[key]]
 row = 1
 col = 1
 base = "w"
+shift = "W"
 finger = "left-ring"
 
 [[key]]
 row = 1
 col = 2
 base = "e"
+shift = "E"
 finger = "left-middle"
 
 [[key]]
 row = 1
 col = 3
 base = "r"
+shift = "R"
 finger = "left-index"
 
 [[key]]
 row = 1
 col = 4
 base = "t"
+shift = "T"
 finger = "left-index"
 
 [[key]]
 row = 1
 col = 5
 base = "y"
+shift = "Y"
 finger = "left-index"
 
 [[key]]
 row = 1
 col = 6
 base = "u"
+shift = "U"
 finger = "left-index"
 
 [[key]]
 row = 1
 col = 7
 base = "i"
+shift = "I"
 finger = "right-index"
 
 [[key]]
 row = 1
 col = 8
 base = "o"
+shift = "O"
 finger = "right-middle"
 
 [[key]]
 row = 1
 col = 9
 base = "p"
+shift = "P"
 finger = "right-ring"
 
 [[key]]
 row = 1
 col = 10
 base = "["
+shift = "{"
 finger = "right-pinky"
 
 [[key]]
 row = 1
 col = 11
 base = "]"
+shift = "}"
 finger = "right-pinky"
 
 [[key]]
 row = 1
 col = 12
 base = "\\"
+shift = "|"
 finger = "right-pinky"
 
 [[key]]
 row = 2
 col = 0
 base = "a"
+shift = "A"
 finger = "left-pinky"
 
 [[key]]
 row = 2
 col = 1
 base = "s"
+shift = "S"
 finger = "left-ring"
 
 [[key]]
 row = 2
 col = 2
 base = "d"
+shift = "D"
 finger = "left-middle"
 
 [[key]]
 row = 2
 col = 3
 base = "f"
+shift = "F"
 finger = "left-index"
 
 [[key]]
 row = 2
 col = 4
 base = "g"
+shift = "G"
 finger = "left-index"
 
 [[key]]
 row = 2
 col = 5
 base = "h"
+shift = "H"
 finger = "right-index"
 
 [[key]]
 row = 2
 col = 6
 base = "j"
+shift = "J"
 finger = "right-index"
 
 [[key]]
 row = 2
 col = 7
 base = "k"
+shift = "K"
 finger = "right-middle"
 
 [[key]]
 row = 2
 col = 8
 base = "l"
+shift = "L"
 finger = "right-ring"
 
 [[key]]
 row = 2
 col = 9
 base = ";"
+shift = ":"
 finger = "right-pinky"
 
 [[key]]
 row = 2
 col = 10
 base = "'"
+shift = "\""
 finger = "right-pinky"
 
 [[key]]
 row = 3
 col = 0
 base = "z"
+shift = "Z"
 finger = "left-pinky"
 
 [[key]]
 row = 3
 col = 1
 base = "x"
+shift = "X"
 finger = "left-ring"
 
 [[key]]
 row = 3
 col = 2
 base = "c"
+shift = "C"
 finger = "left-middle"
 
 [[key]]
 row = 3
 col = 3
 base = "v"
+shift = "V"
 finger = "left-index"
 
 [[key]]
 row = 3
 col = 4
 base = "b"
+shift = "B"
 finger = "left-index"
 
 [[key]]
 row = 3
 col = 5
 base = "n"
+shift = "N"
 finger = "right-index"
 
 [[key]]
 row = 3
 col = 6
 base = "m"
+shift = "M"
 finger = "right-index"
 
 [[key]]
 row = 3
 col = 7
 base = ","
+shift = "<"
 finger = "right-middle"
 
 [[key]]
 row = 3
 col = 8
 base = "."
+shift = ">"
 finger = "right-ring"
 
 [[key]]
 row = 3
 col = 9
 base = "/"
+shift = "?"
 finger = "right-pinky"
 
 [[key]]

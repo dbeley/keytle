@@ -18,8 +18,37 @@
 //! it. Callers that need a character to actually arrive should pair
 //! [`Emulator::is_char_reachable`] with [`Emulator::translate`].
 
-use crate::layout::{Layout, Position};
+use crate::layout::{Key, Layout, Position};
 use std::collections::BTreeSet;
+
+/// Which legend of a key a character came from. Emulation maps a keystroke to
+/// the target's *same-level* legend, so typing `E` on a qwerty board yields
+/// `F`, not `f`: the case the user typed survives the move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    Base,
+    Shift,
+    Altgr,
+}
+
+impl Level {
+    /// The character `key` shows at this level, if it has one.
+    fn legend(self, key: &Key) -> Option<char> {
+        match self {
+            Level::Base => Some(key.base),
+            Level::Shift => key.shift,
+            Level::Altgr => key.altgr,
+        }
+    }
+}
+
+/// The level at which `key` produces `c` exactly, trying base, then shift,
+/// then altgr. Case matters: `'E'` and `'e'` are different levels.
+fn level_of(key: &Key, c: char) -> Option<Level> {
+    [Level::Base, Level::Shift, Level::Altgr]
+        .into_iter()
+        .find(|level| level.legend(key) == Some(c))
+}
 
 /// One host board emulating one target board.
 pub struct Emulator {
@@ -67,17 +96,30 @@ impl Emulator {
     }
 
     /// The target character produced by pressing whatever key types `typed` on
-    /// the host board.
+    /// the host board. The host legend that matches `typed` exactly (base,
+    /// shift or altgr) picks the level, and the target is read at that same
+    /// level, so case survives: `E` on a qwerty host emulating Colemak-DH is
+    /// `F`. `None` when the target has no legend at that level.
     pub fn translate(&self, typed: char) -> Option<char> {
-        let pos = self.host.position_of_base(typed)?;
-        self.target.key_at(pos).map(|key| key.base)
+        let host_key = self.host.key_at(self.host.position_of_base(typed)?)?;
+        let level = level_of(host_key, typed)?;
+        self.target
+            .key_at(host_key.pos)
+            .and_then(|key| level.legend(key))
     }
 
     /// The host character that has to be pressed to produce `expected`; this is
-    /// the subscript the emulated keyboard legend shows.
+    /// the subscript the emulated keyboard legend shows. It is read at the
+    /// level `expected` occupies on the target, so the subscript for `F` is `E`
+    /// and for `f` is `e`.
     pub fn host_char_for(&self, expected: char) -> Option<char> {
-        let pos = self.target.position_of_base(expected)?;
-        self.host.key_at(pos).map(|key| key.base)
+        let target_key = self
+            .target
+            .key_at(self.target.position_of_base(expected)?)?;
+        let level = level_of(target_key, expected)?;
+        self.host
+            .key_at(target_key.pos)
+            .and_then(|key| level.legend(key))
     }
 
     /// Every character of the target layout that no keystroke on the host can
@@ -227,9 +269,27 @@ mod tests {
     #[test]
     fn shifted_characters_resolve_through_the_same_position() {
         let e = emulator("azerty", "colemak-dh");
-        // azerty's 'A' is the shifted legend of the (1, 0) key; colemak has 'q' there.
-        assert_eq!(e.translate('A'), Some('q'));
+        // azerty's 'A' is the shifted legend of the (1, 0) key, where colemak
+        // has its shifted 'Q'.
+        assert_eq!(e.translate('A'), Some('Q'), "the shift level, not base");
         assert!(e.is_char_reachable('Q'), "colemak's shifted Q at (1, 0)");
-        assert_eq!(e.host_char_for('Q'), Some('a'));
+        assert_eq!(e.host_char_for('Q'), Some('A'), "the shifted subscript");
+    }
+
+    #[test]
+    fn a_capital_letter_survives_emulation() {
+        let e = emulator("qwerty", "colemak-dh");
+
+        // qwerty's 'E' is the shifted legend at (1, 2), which colemak-dh labels
+        // with a shifted 'F'; the lower case pair behaves the same way.
+        assert_eq!(e.translate('E'), Some('F'));
+        assert_eq!(e.translate('e'), Some('f'));
+
+        // The legend subscript follows the level too: E for F, e for f.
+        assert_eq!(e.host_char_for('F'), Some('E'));
+        assert_eq!(e.host_char_for('f'), Some('e'));
+
+        // A digit's shifted form moves to whatever sits there on the target.
+        assert_eq!(e.translate('!'), Some('!'), "both shift-'1' at (0, 1)");
     }
 }

@@ -222,6 +222,25 @@ mod tests {
     }
 
     #[test]
+    fn every_letter_key_shifts_to_its_uppercase_form() {
+        for (id, _) in BUNDLED {
+            let layout = bundled(id);
+            for key in layout.keys.values() {
+                if key.base.is_ascii_alphabetic() {
+                    assert_eq!(
+                        key.shift,
+                        Some(key.base.to_ascii_uppercase()),
+                        "{id} cannot type the capital of {:?} at ({}, {})",
+                        key.base,
+                        key.pos.row,
+                        key.pos.col
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn qwerty_rows_are_the_us_layout() {
         let layout = bundled("qwerty");
         assert_eq!(row(&layout, 0), "`1234567890-=");
