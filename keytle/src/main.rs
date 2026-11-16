@@ -1,6 +1,22 @@
-use clap::{CommandFactory, Parser, Subcommand};
+mod app;
+mod ui;
+
+use std::io::{self, Stdout};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use clap::{Parser, Subcommand};
+use crossterm::event::{self, Event, KeyEvent};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::cursor;
 use keytle_core::config::Config;
 use keytle_core::paths::{self, Paths};
+use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::Terminal;
+
+use crate::app::{Action, App};
 
 #[derive(Parser)]
 #[command(
@@ -38,10 +54,128 @@ fn main() {
             command: LayoutsCommand::List,
         }) => layouts_list(),
         None => {
-            let mut out = Cli::command();
-            let _ = out.print_help();
+            if let Err(err) = run_tui() {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
         }
     }
+}
+
+/// The current wall clock in milliseconds. The only clock read in the program:
+/// everything below it takes `now_ms` as an argument.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// Put the terminal back the way we found it. Idempotent and silent: it is
+/// called from a guard, from the panic hook, and on the normal path.
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    // Drawn frames hide the cursor; leaving it hidden would strand the shell.
+    let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
+}
+
+/// Restores the terminal when dropped — on success, on error, and on unwind.
+struct TerminalGuard {
+    restored: bool,
+}
+
+impl TerminalGuard {
+    fn new() -> TerminalGuard {
+        TerminalGuard { restored: false }
+    }
+
+    fn disarm(&mut self) {
+        self.restored = true;
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            restore_terminal();
+        }
+    }
+}
+
+/// Start the TUI: raw mode, alternate screen, and a loop that survives resizes.
+fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
+    let dirs = paths::paths();
+    let config = Config::load(&dirs.config_file())?;
+    let started = now_ms();
+    let mut app = App::new(config, &dirs, started)?;
+
+    install_panic_hook();
+    enable_raw_mode()?;
+    let mut guard = TerminalGuard::new();
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    let result = event_loop(&mut terminal, &mut app);
+    drop(terminal);
+    guard.disarm();
+    restore_terminal();
+    result
+}
+
+/// Wait for input, handle it, redraw. Redrawing on every tick keeps the elapsed
+/// seconds and speed live while the typist is thinking.
+fn event_loop(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        terminal.draw(|frame| ui::draw(frame, app))?;
+        if !event::poll(Duration::from_millis(16))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) => {
+                if handle(terminal, app, key)? {
+                    return Ok(());
+                }
+            }
+            // Bracketed paste is not typing: it must never reach the scorer.
+            Event::Paste(_) => app.ignore_input(),
+            // A resize needs nothing but the next frame, which is already drawn
+            // from the new area.
+            Event::Resize(_, _) => {}
+            _ => {}
+        }
+    }
+}
+
+/// Apply one key event; `Ok(true)` means quit. Generic over the backend so the
+/// loop's decision — quit, or record and redraw — can be tested off a TTY.
+fn handle<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    key: KeyEvent,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    match app.handle_key(key, now_ms()) {
+        Action::Quit => Ok(true),
+        Action::Finish => {
+            app.finish_lesson(now_ms());
+            terminal.draw(|frame| ui::draw(frame, app))?;
+            Ok(false)
+        }
+        Action::Redraw | Action::StartLesson => Ok(false),
+    }
+}
+
+/// A panic in the UI must not leave the shell in raw mode with no cursor.
+fn install_panic_hook() {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        hook(info);
+    }));
 }
 
 fn doctor() {
@@ -106,6 +240,9 @@ fn render(dirs: &Paths, config: &Config, version: &str, term: Option<&str>) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::Screen;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
     fn dirs() -> Paths {
@@ -147,5 +284,65 @@ mod tests {
         assert!(out.contains("  mode = \"words\"\n"), "{out}");
         assert!(out.contains("  target_wpm = 60\n"), "{out}");
         assert!(out.contains("  emulate = true\n"), "{out}");
+    }
+
+    /// A throwaway config/data root, so `App::new` never touches the real ones.
+    fn scratch(tag: &str) -> (PathBuf, Paths) {
+        let base = std::env::temp_dir().join(format!(
+            "keytle-main-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let paths = Paths {
+            config_dir: base.join("config"),
+            data_dir: base.join("data"),
+        };
+        (base, paths)
+    }
+
+    fn screen(terminal: &Terminal<TestBackend>) -> String {
+        let buf = terminal.backend().buffer();
+        let width = buf.area().width as usize;
+        buf.content()
+            .chunks(width)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn press(terminal: &mut Terminal<TestBackend>, app: &mut App, code: KeyCode) -> bool {
+        handle(terminal, app, KeyEvent::new(code, KeyModifiers::NONE)).unwrap()
+    }
+
+    #[test]
+    fn q_on_the_idle_typing_screen_tells_the_loop_to_quit() {
+        let (base, paths) = scratch("quit");
+        let mut app = App::new(Config::default(), &paths, 0).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        assert!(app.is_idle());
+        assert!(press(&mut terminal, &mut app, KeyCode::Char('q')));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn finishing_a_lesson_records_it_and_draws_the_results() {
+        let (base, paths) = scratch("finish");
+        let mut app = App::new(Config::default(), &paths, 0).unwrap();
+        app.config.emulate = false;
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        app.start_lesson(0);
+        let text = app.lesson.as_ref().unwrap().text.clone();
+        let mut quit = false;
+        for ch in text.chars() {
+            quit = press(&mut terminal, &mut app, KeyCode::Char(ch));
+        }
+        assert!(!quit, "the last character finishes, it does not quit");
+        assert_eq!(app.screen, Screen::Results);
+        assert_eq!(app.profile.tests_completed, 1, "the lesson was recorded");
+        let drawn = screen(&terminal);
+        assert!(drawn.contains("results"), "the loop redrew as results:\n{drawn}");
+        assert!(drawn.contains("accuracy"), "{drawn}");
+        let _ = std::fs::remove_dir_all(base);
     }
 }

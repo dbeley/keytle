@@ -182,6 +182,22 @@ impl TypingSession {
         Outcome::Ignored
     }
 
+    /// Every character of the lesson, in order. A view needs the whole text to
+    /// draw what is typed, what is current and what is still ahead.
+    pub fn text(&self) -> &[char] {
+        &self.text
+    }
+
+    /// How many characters are already behind the cursor.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// The character the typist must press next, or `None` at the end.
+    pub fn expected(&self) -> Option<char> {
+        self.text.get(self.cursor).copied()
+    }
+
     /// True once every character has been typed, including on empty text.
     pub fn is_complete(&self) -> bool {
         self.cursor >= self.text.len()
