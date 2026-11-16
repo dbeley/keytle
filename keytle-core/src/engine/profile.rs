@@ -346,7 +346,9 @@ mod tests {
         let profile = profile_with("ns");
         assert!(!profile.keys.contains_key(&'t'));
         let reachable = chars("ns");
-        let mean = profile.mean_confidence(&reachable, TARGET).expect("two keys");
+        let mean = profile
+            .mean_confidence(&reachable, TARGET)
+            .expect("two keys");
         assert!((mean - 1.0).abs() < 1e-5, "mean was {mean}");
         assert_eq!(
             profile.verdict(&colemak(), "en", &reachable, TARGET),
@@ -383,7 +385,9 @@ mod tests {
         let mut chs = Vec::new();
         for (i, now) in [10, 20, 30].into_iter().enumerate() {
             let verdict = profile.verdict(&layout, "en", &reachable, TARGET);
-            let event = profile.apply(verdict, now).unwrap_or_else(|| panic!("unlock {i}"));
+            let event = profile
+                .apply(verdict, now)
+                .unwrap_or_else(|| panic!("unlock {i}"));
             assert_eq!(event.how, UnlockHow::Auto);
             assert_eq!(event.ts_ms, now);
             chs.push(event.ch);
@@ -394,7 +398,10 @@ mod tests {
             profile.verdict(&layout, "en", &reachable, TARGET),
             Verdict::Blocked(BlockReason::SessionCap)
         );
-        assert_eq!(profile.apply(Verdict::Blocked(BlockReason::SessionCap), 40), None);
+        assert_eq!(
+            profile.apply(Verdict::Blocked(BlockReason::SessionCap), 40),
+            None
+        );
     }
 
     #[test]
@@ -403,7 +410,10 @@ mod tests {
         profile.unlocks_this_session = 3;
         profile.session_started_ms = 1_000;
         profile.tick_session(1_000 + 29 * 60_000);
-        assert_eq!(profile.unlocks_this_session, 3, "29 minutes is not idle yet");
+        assert_eq!(
+            profile.unlocks_this_session, 3,
+            "29 minutes is not idle yet"
+        );
         assert_eq!(profile.session_started_ms, 1_000);
         profile.tick_session(1_000 + 31 * 60_000);
         assert_eq!(profile.unlocks_this_session, 0);

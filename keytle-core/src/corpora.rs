@@ -159,7 +159,10 @@ mod tests {
         scratch.write("fr/words.txt", "zibzib 1\n");
         let merged = load("fr", Some(&scratch.0)).expect("the French corpus plus a user word");
         assert_eq!(merged.words.len(), base.words.len() + 1);
-        assert_eq!(merged.words.last().map(|word| word.text.as_str()), Some("zibzib"));
+        assert_eq!(
+            merged.words.last().map(|word| word.text.as_str()),
+            Some("zibzib")
+        );
         assert_eq!(merged.sentences.len(), base.sentences.len());
     }
 
@@ -170,7 +173,10 @@ mod tests {
         scratch.write("en/sentences.txt", "Ahoy there.\n");
         let merged = load("en", Some(&scratch.0)).expect("the English corpus plus a user line");
         assert_eq!(merged.sentences.len(), base.sentences.len() + 1);
-        assert_eq!(merged.sentences.last().map(String::as_str), Some("Ahoy there."));
+        assert_eq!(
+            merged.sentences.last().map(String::as_str),
+            Some("Ahoy there.")
+        );
     }
 
     #[test]

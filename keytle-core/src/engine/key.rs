@@ -201,7 +201,10 @@ mod tests {
     fn interval_ema_uses_alpha_point_one() {
         let mut s = KeyStat::default();
         s.record(true, Some(400.0));
-        assert!(close(s.mean_interval_ms, 400.0), "first sample seeds the EMA");
+        assert!(
+            close(s.mean_interval_ms, 400.0),
+            "first sample seeds the EMA"
+        );
         s.record(true, Some(100.0));
         assert!(close(s.mean_interval_ms, 370.0));
         s.record(true, Some(100.0));

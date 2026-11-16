@@ -359,7 +359,10 @@ mod tests {
         assert_eq!(agg.misses, 0, "the letter was known, so it is not blamed");
         // The session still counts the keystroke as an error.
         assert!((stats.accuracy - 0.5).abs() < EPS);
-        assert!(stats.raw_wpm > stats.net_wpm, "the shift miss still costs raw speed");
+        assert!(
+            stats.raw_wpm > stats.net_wpm,
+            "the shift miss still costs raw speed"
+        );
     }
 
     #[test]

@@ -93,10 +93,8 @@ mod tests {
 
     impl Scratch {
         fn new(tag: &str) -> Scratch {
-            let dir = std::env::temp_dir().join(format!(
-                "keytle-layouts-{}-{tag}",
-                std::process::id()
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("keytle-layouts-{}-{tag}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).expect("a scratch layout dir");
             Scratch(dir)
@@ -152,8 +150,15 @@ mod tests {
             assert_eq!(&layout.id, id, "the file id matches its bundle id");
             assert!(!layout.name.is_empty(), "{id} has a name");
             assert_eq!(layout.rows, 5, "{id} uses the five-row board");
-            assert_eq!(layout.row_offset, [0, 1, 1, 1, 2], "{id} uses the same stagger");
-            assert!(layout.key_at(Position::new(4, 0)).is_some(), "{id} has a space key");
+            assert_eq!(
+                layout.row_offset,
+                [0, 1, 1, 1, 2],
+                "{id} uses the same stagger"
+            );
+            assert!(
+                layout.key_at(Position::new(4, 0)).is_some(),
+                "{id} has a space key"
+            );
         }
     }
 
@@ -162,10 +167,7 @@ mod tests {
         for (id, _) in BUNDLED {
             let layout = bundled(id);
             for letter in 'a'..='z' {
-                assert!(
-                    layout.contains_char(letter),
-                    "{id} is missing {letter:?}"
-                );
+                assert!(layout.contains_char(letter), "{id} is missing {letter:?}");
             }
         }
     }
@@ -253,7 +255,10 @@ mod tests {
             Some(Position::new(2, 3)),
             "the home key under the left index"
         );
-        assert_eq!(layout.unlock_order_for("en"), ['f', 'j', 'd', 'k', 's', 'l', 'a', ';']);
+        assert_eq!(
+            layout.unlock_order_for("en"),
+            ['f', 'j', 'd', 'k', 's', 'l', 'a', ';']
+        );
     }
 
     #[test]
@@ -272,7 +277,10 @@ mod tests {
         assert_eq!(comma.base, ',');
         assert_eq!(comma.shift, Some('?'), "AZERTY puts ? on shift-comma");
         assert_eq!(layout.unlock_order_for("fr"), ['é', 'è', 'à', 'ç', 'ù']);
-        assert_eq!(layout.unlock_order_for("en"), ['q', 's', 'd', 'f', 'g', 'h', 'j', 'k']);
+        assert_eq!(
+            layout.unlock_order_for("en"),
+            ['q', 's', 'd', 'f', 'g', 'h', 'j', 'k']
+        );
     }
 
     #[test]
@@ -291,7 +299,9 @@ mod tests {
         // ... and b and g moved up to the top and home rows.
         assert_eq!(layout.position_of_base('b'), Some(Position::new(1, 4)));
         assert_eq!(layout.position_of_base('g'), Some(Position::new(2, 4)));
-        let f = layout.key_at(Position::new(1, 2)).expect("f on the top row");
+        let f = layout
+            .key_at(Position::new(1, 2))
+            .expect("f on the top row");
         assert_eq!(f.altgr, Some('ã'), "the altgr legend comes along");
         assert_eq!(f.finger, Some(Finger::LeftMiddle));
     }
@@ -305,7 +315,9 @@ mod tests {
         assert_eq!(row(&layout, 3), "àyx.k'qghf");
         assert_eq!(layout.position_of_base('é'), Some(Position::new(1, 1)));
         assert_eq!(layout.position_of_base('e'), Some(Position::new(2, 3)));
-        let e = layout.key_at(Position::new(2, 3)).expect("e on the home row");
+        let e = layout
+            .key_at(Position::new(2, 3))
+            .expect("e on the home row");
         assert_eq!(e.altgr, Some('€'), "bépo's altgr euro");
         assert_eq!(layout.unlock_order_for("fr"), ['é', 'è', 'à', 'ç', 'ù']);
     }
@@ -355,10 +367,17 @@ default = ["x"]
 
         let layout = load("qwerty", scratch.path()).expect("the user layout loads");
         assert_eq!(layout.name, "QWERTY with my tweaks");
-        assert_eq!(layout.keys.len(), 1, "the user file replaces the bundled one");
+        assert_eq!(
+            layout.keys.len(),
+            1,
+            "the user file replaces the bundled one"
+        );
 
         let bundled_qwerty = bundled("qwerty");
-        assert_eq!(bundled_qwerty.name, "QWERTY (US)", "the bundled one is untouched");
+        assert_eq!(
+            bundled_qwerty.name, "QWERTY (US)",
+            "the bundled one is untouched"
+        );
     }
 
     #[test]
@@ -386,7 +405,14 @@ default = ["d"]
         let ids = available(scratch.path());
         assert_eq!(
             ids,
-            ["azerty", "bepo", "colemak-dh", "gallium", "qwerty", "workman"],
+            [
+                "azerty",
+                "bepo",
+                "colemak-dh",
+                "gallium",
+                "qwerty",
+                "workman"
+            ],
             "bundled ids plus the user's, sorted"
         );
 
@@ -417,7 +443,10 @@ default = ["d"]
             matches!(&err, LayoutError::UnknownLayout { id } if id == "workman"),
             "got {err:?}"
         );
-        assert!(err.to_string().contains("workman"), "message names it: {err}");
+        assert!(
+            err.to_string().contains("workman"),
+            "message names it: {err}"
+        );
 
         let scratch = Scratch::new("broken");
         scratch.write("bad.toml", "id = \"bad\"\n");
@@ -433,7 +462,8 @@ rows = 5
 row_offset = [0, 1, 1, 1, 2]
 "#,
         );
-        let err = load("mismatched", scratch.path()).expect_err("the id does not match the file name");
+        let err =
+            load("mismatched", scratch.path()).expect_err("the id does not match the file name");
         assert!(
             matches!(&err, LayoutError::IdMismatch { expected, found, .. }
                 if expected == "mismatched" && found == "something-else"),

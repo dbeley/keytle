@@ -148,7 +148,11 @@ fn pseudo_lesson(
         .map(|_| next_word(&weights, &vowels, &model, tier, rng))
         .collect::<Vec<_>>()
         .join(" ");
-    Lesson { words: count, text, note }
+    Lesson {
+        words: count,
+        text,
+        note,
+    }
 }
 
 /// Real corpus words, or `None` when too few of them fit the alphabet.
@@ -455,10 +459,7 @@ fn typable_chars(layout: &Layout, letters: &[char]) -> BTreeSet<char> {
         }
     }
     for key in layout.keys.values() {
-        for ch in [Some(key.base), key.shift, key.altgr]
-            .into_iter()
-            .flatten()
-        {
+        for ch in [Some(key.base), key.shift, key.altgr].into_iter().flatten() {
             if !ch.is_alphanumeric() && !ch.is_control() {
                 set.insert(ch);
             }
@@ -472,10 +473,7 @@ fn typable_chars(layout: &Layout, letters: &[char]) -> BTreeSet<char> {
 fn all_letters(layout: &Layout) -> Vec<char> {
     let mut set: BTreeSet<char> = BTreeSet::new();
     for key in layout.keys.values() {
-        for ch in [Some(key.base), key.shift, key.altgr]
-            .into_iter()
-            .flatten()
-        {
+        for ch in [Some(key.base), key.shift, key.altgr].into_iter().flatten() {
             if ch.is_alphabetic() {
                 set.insert(ch);
             }

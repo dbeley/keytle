@@ -94,10 +94,7 @@ impl Corpus {
                 return Err(bad_line(number, reason));
             }
             let freq: u64 = freq.parse().map_err(|_| {
-                bad_line(
-                    number,
-                    format!("{freq:?} is not a frequency for {text:?}"),
-                )
+                bad_line(number, format!("{freq:?} is not a frequency for {text:?}"))
             })?;
             match seen.get(text) {
                 Some(&at) => {
@@ -264,10 +261,7 @@ mod tests {
     #[test]
     fn words_parse_in_file_order_with_their_frequencies() {
         let corpus = Corpus::parse_words("the 12\nof 7\n").expect("a valid word list");
-        assert_eq!(
-            corpus.words,
-            vec![Word::new("the", 12), Word::new("of", 7)]
-        );
+        assert_eq!(corpus.words, vec![Word::new("the", 12), Word::new("of", 7)]);
         assert!(corpus.sentences.is_empty());
     }
 
@@ -309,10 +303,7 @@ mod tests {
     #[test]
     fn a_combining_mark_is_rejected_by_name() {
         let err = Corpus::parse_words("cafe\u{301} 5\n").expect_err("a combining accent");
-        assert!(
-            matches!(err, CorpusError::BadLine { line: 1, .. }),
-            "{err}"
-        );
+        assert!(matches!(err, CorpusError::BadLine { line: 1, .. }), "{err}");
         assert!(err.to_string().contains("combining mark"), "{err}");
     }
 
@@ -351,7 +342,11 @@ mod tests {
 
         assert_eq!(
             base.words,
-            vec![Word::new("the", 5), Word::new("of", 1), Word::new("zebra", 1)]
+            vec![
+                Word::new("the", 5),
+                Word::new("of", 1),
+                Word::new("zebra", 1)
+            ]
         );
         assert_eq!(base.sentences, vec!["One.".to_string(), "Two.".to_string()]);
     }
@@ -370,10 +365,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["as", "ade"]
         );
-        assert_eq!(
-            corpus.sentences_covered_by(&allow("asd. ")),
-            vec!["as ad."]
-        );
+        assert_eq!(corpus.sentences_covered_by(&allow("asd. ")), vec!["as ad."]);
         assert!(corpus.words_covered_by(&BTreeSet::new()).is_empty());
     }
 
@@ -394,10 +386,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["ete", "a"]
         );
-        assert_eq!(
-            corpus.sentences_covered_by(&allowed),
-            vec!["Ete a Paris."]
-        );
+        assert_eq!(corpus.sentences_covered_by(&allowed), vec!["Ete a Paris."]);
     }
 
     #[test]
