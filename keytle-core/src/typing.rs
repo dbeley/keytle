@@ -50,13 +50,17 @@ pub enum Outcome {
 /// wrong, and how fast it was hit on average.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyAgg {
+    #[serde(default)]
     pub hits: u32,
+    #[serde(default)]
     pub misses: u32,
     /// Wrong case typed where this key's character was expected: `T` for `t`.
     /// Kept apart from `misses` so the unlock rule can tell a letter that is not
     /// known from a modifier that is not known.
+    #[serde(default)]
     pub shift_misses: u32,
     /// Rounded mean interval in ms between consecutive correct keystrokes.
+    #[serde(default)]
     pub mean_dt: u32,
 }
 

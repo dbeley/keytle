@@ -29,7 +29,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 
 /// Current record schema version. Bumped only for a breaking change; added
-/// fields are tolerated by `serde` defaults.
+/// fields carry `#[serde(default)]`, so an old line missing one still parses.
 pub const RECORD_VERSION: u8 = 1;
 
 /// One finished lesson, as written to `tests.jsonl`.
@@ -39,23 +39,38 @@ pub struct TestRecord {
     pub v: u8,
     /// When the test finished, as an RFC 3339 string. Recorded for later views;
     /// the stats views themselves are indexed by test number.
+    #[serde(default)]
     pub ts: String,
+    #[serde(default)]
     pub layout: String,
     /// The physical layout the keystrokes were read through.
+    #[serde(default)]
     pub host: String,
     /// Whether the host layout was emulated positionally.
+    #[serde(default)]
     pub emulated: bool,
+    #[serde(default)]
     pub lang: String,
+    // `mode` has no sensible default: a record that does not say what it was
+    // typing cannot be compared to anything, so it stays required.
     pub mode: Mode,
     /// Which lesson of the session was typed, 0-based.
+    #[serde(default)]
     pub lesson: u32,
+    #[serde(default)]
     pub wpm: f32,
+    #[serde(default)]
     pub raw_wpm: f32,
+    #[serde(default)]
     pub accuracy: f32,
+    #[serde(default)]
     pub duration_ms: u64,
     /// Per-key totals, keyed by the lowercase expected character.
+    #[serde(default)]
     pub keys: BTreeMap<char, KeyAgg>,
+    #[serde(default)]
     pub unlocked_before: u32,
+    #[serde(default)]
     pub unlocked_after: u32,
 }
 
@@ -75,14 +90,17 @@ pub enum StatsError {
 pub fn append(path: &Path, rec: &TestRecord) -> io::Result<()> {
     // A record with a non-finite float cannot be written as JSON at all; say so
     // instead of writing a line that no reader could ever parse back.
-    let line = serde_json::to_string(rec)
+    let mut line = serde_json::to_string(rec)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    // The newline belongs to the line: one `write_all` per record, so a second
+    // O_APPEND writer can never land between the object and its terminator and
+    // put two objects on one line — which `read_all` treats as fatal.
+    line.push('\n');
     if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
-    file.write_all(b"\n")?;
     file.flush()
 }
 
@@ -229,8 +247,9 @@ pub struct KeyRow {
 
 /// The per-key table over the last `last` matching records, weakest first.
 ///
-/// The trend compares the mean accuracy of the older half of the window against
-/// the newer half, so "improving" means the second half is better than the first.
+/// The trend compares the mean interval per key in the older half of the window
+/// against the newer half: "improving" means the second half is *faster*.
+/// Accuracy is reported separately and plays no part in it.
 pub fn key_rows(
     records: &[TestRecord],
     filter: &Filter,
@@ -290,9 +309,9 @@ pub fn key_rows(
     rows
 }
 
-/// How much accuracy moved between the halves of the window before it counts as
-/// a trend rather than noise.
-const TREND_EPSILON: f32 = 0.005;
+/// How much the mean interval (ms) may move between the halves of the window
+/// before it counts as a trend rather than noise.
+const TREND_EPSILON: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Half {
@@ -312,25 +331,25 @@ struct Totals {
     newer_acc: HalfAcc,
 }
 
-/// Hits and misses inside one half of the window. Shift misses are excluded:
-/// the letter was known and the modifier was not, so blaming the letter would
-/// misreport the trend.
+/// Timed keystrokes inside one half of the window, as a weighted mean interval.
 #[derive(Debug, Default)]
 struct HalfAcc {
-    hits: u32,
-    misses: u32,
+    dt_weighted_sum: f32,
+    dt_weight: u32,
 }
 
 impl HalfAcc {
     fn add(&mut self, agg: &KeyAgg) {
-        self.hits += agg.hits;
-        self.misses += agg.misses;
+        // The hit count weights a per-record mean of intervals, as in `Totals`.
+        if agg.mean_dt > 0 && agg.hits > 0 {
+            self.dt_weighted_sum += agg.mean_dt as f32 * agg.hits as f32;
+            self.dt_weight += agg.hits;
+        }
     }
 
-    /// `None` when this half holds no evidence for the key.
-    fn accuracy(&self) -> Option<f32> {
-        let total = self.hits + self.misses;
-        (total > 0).then(|| self.hits as f32 / total as f32)
+    /// Mean interval over this half, or `None` when nothing was timed.
+    fn mean_dt(&self) -> Option<f32> {
+        (self.dt_weight > 0).then(|| self.dt_weighted_sum / self.dt_weight as f32)
     }
 }
 
@@ -360,10 +379,14 @@ impl Totals {
     }
 
     fn trend(&self) -> Trend {
-        match (self.older_acc.accuracy(), self.newer_acc.accuracy()) {
-            (Some(older), Some(newer)) if newer - older > TREND_EPSILON => Trend::Up,
-            (Some(older), Some(newer)) if older - newer > TREND_EPSILON => Trend::Down,
-            // One half is empty, or the two agree: nothing to claim.
+        // Faster is better, and shorter intervals are faster: a smaller mean
+        // interval on the newer half means the key is improving. Accuracy is
+        // deliberately not consulted here — it is reported on its own column,
+        // and mixing it in made "improving" claim things the intervals deny.
+        match (self.older_acc.mean_dt(), self.newer_acc.mean_dt()) {
+            (Some(older), Some(newer)) if older - newer > TREND_EPSILON => Trend::Up,
+            (Some(older), Some(newer)) if newer - older > TREND_EPSILON => Trend::Down,
+            // One half is untimed, or the two agree: nothing to claim.
             _ => Trend::Flat,
         }
     }
@@ -464,6 +487,66 @@ mod tests {
         let raw = fs::read_to_string(&path).expect("the file");
         assert_eq!(raw.lines().count(), 2);
         assert!(raw.ends_with('\n'), "every line is terminated");
+    }
+
+    #[test]
+    fn append_writes_each_record_and_its_newline_as_one_line() {
+        let scratch = Scratch::new("atomic");
+        let path = scratch.file();
+        let records = [
+            record("2026-11-15T10:00:00Z", Mode::Pseudo, 61.0, 0.0),
+            record("2026-11-15T10:05:00Z", Mode::Words, 62.5, 1.0),
+        ];
+        for rec in &records {
+            append(&path, rec).expect("append");
+        }
+        // The object and its `\n` go out in a single `write_all`, so the file is
+        // exactly the serialised lines back to back: a second writer cannot land
+        // between an object and its terminator and put two objects on one line.
+        let raw = fs::read_to_string(&path).expect("the file");
+        let expected: String = records
+            .iter()
+            .map(|rec| format!("{}\n", serde_json::to_string(rec).expect("encode")))
+            .collect();
+        assert_eq!(raw, expected, "one write per record, newline included");
+        assert_eq!(
+            raw.matches('\n').count(),
+            records.len(),
+            "exactly one newline per record"
+        );
+        for line in raw.lines() {
+            serde_json::from_str::<TestRecord>(line).expect("every line parses");
+        }
+        assert_eq!(read_all(&path).expect("read back"), records.to_vec());
+    }
+
+    #[test]
+    fn a_record_missing_a_later_added_field_still_parses() {
+        // The shape an older keytle wrote, before `host`, `emulated`, `lesson`
+        // and `keys` existed. A future added field must not brick startup.
+        let line = concat!(
+            r#"{"v":1,"ts":"2026-11-15T10:00:00Z","layout":"colemak-dh","lang":"en","#,
+            r#""mode":"pseudo","wpm":50.0,"raw_wpm":52.0,"accuracy":0.96,"#,
+            r#""duration_ms":30000,"unlocked_before":4,"unlocked_after":5}"#,
+        );
+        let rec: TestRecord = serde_json::from_str(line).expect("old line parses");
+        assert_eq!(rec.host, "");
+        assert!(!rec.emulated);
+        assert_eq!(rec.lesson, 0);
+        assert!(rec.keys.is_empty());
+        assert_eq!(rec.wpm, 50.0, "present fields still win");
+
+        // `KeyAgg` gains a field the same way.
+        let agg: KeyAgg = serde_json::from_str(r#"{"hits":3}"#).expect("short KeyAgg parses");
+        assert_eq!(
+            agg,
+            KeyAgg {
+                hits: 3,
+                misses: 0,
+                shift_misses: 0,
+                mean_dt: 0,
+            }
+        );
     }
 
     #[test]
@@ -665,33 +748,34 @@ mod tests {
     }
 
     #[test]
-    fn a_key_whose_newer_half_is_better_trends_up() {
-        // Older half: 6 hits, 4 misses → 0.6. Newer half: 10 hits, 0 misses.
+    fn a_key_whose_newer_half_is_faster_trends_up() {
+        // Same accuracy in both halves (4 hits, 1 miss each), so only the
+        // interval can drive the verdict: 200 ms → 100 ms is faster.
         let records = vec![
-            with_key("2026-11-15T09:00:00Z", 'k', key(3, 2, 150)),
-            with_key("2026-11-15T09:05:00Z", 'k', key(3, 2, 150)),
-            with_key("2026-11-15T09:10:00Z", 'k', key(5, 0, 150)),
-            with_key("2026-11-15T09:15:00Z", 'k', key(5, 0, 150)),
+            with_key("2026-11-15T09:00:00Z", 'k', key(4, 1, 200)),
+            with_key("2026-11-15T09:05:00Z", 'k', key(4, 1, 200)),
+            with_key("2026-11-15T09:10:00Z", 'k', key(4, 1, 100)),
+            with_key("2026-11-15T09:15:00Z", 'k', key(4, 1, 100)),
         ];
         let rows = key_rows(&records, &Filter::default(), 20, 150.0);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].ch, 'k');
         assert_eq!(rows[0].trend, Trend::Up);
-        assert!(close(rows[0].accuracy, 16.0 / 20.0), "windowed accuracy");
+        assert!(close(rows[0].accuracy, 0.8), "windowed accuracy");
         assert_eq!(rows[0].samples, 20);
 
         // The mirror image, so the sign is not an accident of the ordering.
         let worse = vec![
-            with_key("2026-11-15T09:00:00Z", 'k', key(5, 0, 150)),
-            with_key("2026-11-15T09:05:00Z", 'k', key(5, 0, 150)),
-            with_key("2026-11-15T09:10:00Z", 'k', key(3, 2, 150)),
-            with_key("2026-11-15T09:15:00Z", 'k', key(3, 2, 150)),
+            with_key("2026-11-15T09:00:00Z", 'k', key(4, 1, 100)),
+            with_key("2026-11-15T09:05:00Z", 'k', key(4, 1, 100)),
+            with_key("2026-11-15T09:10:00Z", 'k', key(4, 1, 200)),
+            with_key("2026-11-15T09:15:00Z", 'k', key(4, 1, 200)),
         ];
         assert_eq!(
             key_rows(&worse, &Filter::default(), 20, 150.0)[0].trend,
             Trend::Down
         );
-        // Same evidence either side of the midpoint: nothing to report.
+        // Same interval either side of the midpoint: nothing to report.
         let flat = vec![
             with_key("2026-11-15T09:00:00Z", 'k', key(4, 1, 150)),
             with_key("2026-11-15T09:05:00Z", 'k', key(4, 1, 150)),
@@ -700,6 +784,42 @@ mod tests {
             key_rows(&flat, &Filter::default(), 20, 150.0)[0].trend,
             Trend::Flat
         );
+    }
+
+    #[test]
+    fn identical_accuracy_but_a_faster_newer_half_trends_up() {
+        // Grades never move — 9 hits, 1 miss on both sides — but the key is
+        // typed twice as fast in the newer half. That is improvement.
+        let records = vec![
+            with_key("2026-11-15T09:00:00Z", 'e', key(9, 1, 240)),
+            with_key("2026-11-15T09:05:00Z", 'e', key(9, 1, 120)),
+        ];
+        let row = key_rows(&records, &Filter::default(), 20, 150.0)[0];
+        assert!(close(row.accuracy, 0.9));
+        assert_eq!(row.trend, Trend::Up);
+    }
+
+    #[test]
+    fn identical_accuracy_but_a_slower_newer_half_trends_down() {
+        let records = vec![
+            with_key("2026-11-15T09:00:00Z", 'e', key(9, 1, 120)),
+            with_key("2026-11-15T09:05:00Z", 'e', key(9, 1, 240)),
+        ];
+        let row = key_rows(&records, &Filter::default(), 20, 150.0)[0];
+        assert!(close(row.accuracy, 0.9));
+        assert_eq!(row.trend, Trend::Down);
+    }
+
+    #[test]
+    fn trend_ignores_accuracy() {
+        // Accuracy soars in the newer half while the interval is unchanged.
+        // Speed is what the trend measures, so this stays Flat.
+        let records = vec![
+            with_key("2026-11-15T09:00:00Z", 'k', key(2, 8, 150)),
+            with_key("2026-11-15T09:05:00Z", 'k', key(10, 0, 150)),
+        ];
+        let row = key_rows(&records, &Filter::default(), 20, 150.0)[0];
+        assert_eq!(row.trend, Trend::Flat, "accuracy does not move the trend");
     }
 
     #[test]
