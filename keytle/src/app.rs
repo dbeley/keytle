@@ -12,7 +12,8 @@
 //! is on, because the terminal reports the *host* layout's character.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use keytle_core::config::{adjusted_notice, Config, ConfigError, Mode};
@@ -238,7 +239,7 @@ impl App {
         // on first run it is the one that gets saved.
         let profile = Profile::new(&layout, &config.language, now_ms);
         let reachable_positions = positions_reachable(&layout, &host, config.emulate);
-        let reachable_chars = chars_reachable(&layout, &reachable_positions);
+        let reachable_chars = chars_reachable(&layout, &emulator, config.emulate);
         let tests_path = paths.tests_file();
         // An unreadable or corrupted history must not stop the trainer from
         // starting: the error is kept and the history screens say so, while the
@@ -383,10 +384,14 @@ impl App {
                 Some(mapped) => mapped,
                 None => {
                     // The host has no key at that level: not a typo, just not a
-                    // keystroke the trainer can charge.
+                    // keystroke the trainer can charge. Say so, so the learner
+                    // knows the stroke was ignored rather than mis-typed.
                     if let Some(session) = &mut self.session {
                         session.ignore_input();
                     }
+                    self.notice = Some(format!(
+                        "{typed} ignored — the target layout has no key at that level"
+                    ));
                     return Action::Redraw;
                 }
             }
@@ -562,7 +567,7 @@ impl App {
     fn refresh_reachability(&mut self) {
         self.reachable_positions =
             positions_reachable(&self.layout, &self.host, self.config.emulate);
-        self.reachable_chars = chars_reachable(&self.layout, &self.reachable_positions);
+        self.reachable_chars = chars_reachable(&self.layout, &self.emulator, self.config.emulate);
     }
 
     /// Load the profile for the current (layout, language) pair, creating and
@@ -573,9 +578,25 @@ impl App {
             .profile_file(&self.config.layout, &self.config.language);
         self.profile = match Profile::load(&path) {
             Ok(profile) => profile,
-            Err(_) => {
+            Err(err) => {
+                // A missing file is simply a first run. An unreadable one is not:
+                // it held the learner's progress, and the fresh profile saved
+                // below overwrites it, so a copy is kept and the loss is said
+                // out loud instead of being swallowed.
+                let backup = path.exists().then(|| backup_corrupt(&path));
                 let profile = Profile::new(&self.layout, &self.config.language, now_ms);
-                let _ = profile.save(&path);
+                let saved = profile.save(&path);
+                self.notice = Some(match (backup, saved) {
+                    (Some(Ok(copy)), _) => format!(
+                        "profile could not be read ({err}) — kept a copy at {} and started fresh",
+                        copy.display()
+                    ),
+                    (Some(Err(copy_err)), _) => format!(
+                        "profile could not be read ({err}) — could not back it up ({copy_err}) — started fresh"
+                    ),
+                    (None, Ok(())) => err.to_string(),
+                    (None, Err(save_err)) => format!("{err} · not saved: {save_err}"),
+                });
                 profile
             }
         };
@@ -1051,15 +1072,37 @@ fn positions_reachable(layout: &Layout, host: &Layout, emulate: bool) -> BTreeSe
         .collect()
 }
 
-/// Every legend of a reachable position, which is the alphabet a lesson may use.
-fn chars_reachable(layout: &Layout, reachable: &BTreeSet<Position>) -> BTreeSet<char> {
+/// The alphabet a lesson may use: every character a keystroke can actually
+/// produce, never more.
+///
+/// When emulating, that is what [`Emulator::translate`] can return, which is
+/// level-aware: a target altgr legend on a spot where the host has a plain
+/// letter is *not* in the alphabet, because pressing that key can never produce
+/// it. Without emulation the host *is* the board, so every legend of the target
+/// counts.
+fn chars_reachable(layout: &Layout, emulator: &Emulator, emulate: bool) -> BTreeSet<char> {
+    if emulate {
+        return emulator.reachable_chars();
+    }
     layout
         .keys
-        .iter()
-        .filter(|(pos, _)| reachable.contains(pos))
-        .flat_map(|(_, key)| [Some(key.base), key.shift, key.altgr])
+        .values()
+        .flat_map(|key| [Some(key.base), key.shift, key.altgr])
         .flatten()
         .collect()
+}
+
+/// Copy a profile that could not be read to `<profile>.corrupt` before a fresh
+/// one replaces it, so the progress it held is not destroyed without a trace.
+fn backup_corrupt(path: &Path) -> io::Result<PathBuf> {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".corrupt");
+    let copy = PathBuf::from(name);
+    io::copy(
+        &mut io::BufReader::new(std::fs::File::open(path)?),
+        &mut std::fs::File::create(&copy)?,
+    )?;
+    Ok(copy)
 }
 
 fn note_text(note: Note) -> String {
@@ -1457,6 +1500,91 @@ mod tests {
         let saved = Profile::load(&scratch.paths.profile_file(&app.config.layout, &app.config.language))
             .expect("the profile was written");
         assert_eq!(saved.unlocked.len(), before + 1);
+    }
+
+    #[test]
+    fn the_french_rung_skips_an_accent_the_host_cannot_type() {
+        let scratch = Scratch::new();
+        let config = Config {
+            language: "fr".to_string(),
+            ..Config::default()
+        };
+        // qwerty host, colemak-dh target: é and ç are altgr legends there, and a
+        // qwerty board has no altgr level — so no keystroke can ever produce them.
+        let mut app = App::new(config, &scratch.paths, 0).unwrap();
+        assert!(app.layout.contains_char('é'), "colemak-dh carries é");
+        assert!(!app.emulator.is_char_reachable('é'), "but the host cannot type it");
+        assert!(
+            !app.reachable_chars.contains(&'é'),
+            "so it is not in the practice alphabet"
+        );
+        assert!(!app.reachable_chars.contains(&'ç'));
+
+        // With the letters and the punctuation rung done, the French rung would
+        // have offered é before: it has to skip it instead of unlocking a
+        // character the learner can never type.
+        let punctuation = ['\'', ',', '.', ';', ':', '!', '?'];
+        app.profile.unlocked = app
+            .layout
+            .unlock_order_for("fr")
+            .into_iter()
+            .chain(punctuation)
+            .collect();
+        assert_eq!(
+            app.profile
+                .next_key(&app.layout, "fr", &app.reachable_chars),
+            None,
+            "the rung ends instead of naming an untypeable accent"
+        );
+        let outcome = app.unlock_outcome();
+        assert_ne!(outcome.next, Some('é'), "é must never be the next key");
+        assert!(outcome.next.is_none(), "got {:?}", outcome.next);
+    }
+
+    #[test]
+    fn a_corrupt_profile_is_backed_up_and_reported() {
+        let scratch = Scratch::new();
+        let path = scratch.paths.profile_file("colemak-dh", "en");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{\"v\":1,\"unlocked\":[\"t").unwrap();
+
+        let app = App::new(Config::default(), &scratch.paths, 0).unwrap();
+        let notice = app.notice.clone().expect("the loss is not silent");
+        assert!(notice.contains("could not be read"), "{notice}");
+
+        // The unreadable file survives as `<profile>.corrupt` …
+        let mut name = path.as_os_str().to_owned();
+        name.push(".corrupt");
+        let backup = PathBuf::from(name);
+        assert!(backup.is_file(), "{} was kept", backup.display());
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "{\"v\":1,\"unlocked\":[\"t",
+            "the copy is byte for byte what could not be parsed"
+        );
+        // … and the app runs on a fresh profile it has written back.
+        assert_eq!(app.profile.tests_completed, 0);
+        assert_eq!(Profile::load(&path).unwrap().unlocked, app.profile.unlocked);
+    }
+
+    #[test]
+    fn a_keypress_at_a_level_the_target_lacks_is_reported_not_charged() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.start_lesson(0);
+        app.session = Some(TypingSession::new("f", app.config.strict, 0));
+        // é is not typeable on a qwerty host, so this is not a typo: the stroke
+        // is ignored — and the learner is told, rather than left wondering.
+        let action = app.handle_key(key(KeyCode::Char('é')), 100);
+        assert_eq!(action, Action::Redraw);
+        let notice = app.notice.clone().expect("an ignored stroke is said");
+        assert!(notice.contains("ignored"), "{notice}");
+        let session = app.session.as_ref().unwrap();
+        let stats = session.stats();
+        assert!(
+            stats.per_key.values().all(|agg| agg.misses == 0 && agg.hits == 0),
+            "nothing was charged against the alphabet"
+        );
     }
 
     #[test]

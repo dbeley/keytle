@@ -304,6 +304,10 @@ fn stats_command(
     let points = stats::series(&records, &filter);
     let speed: Vec<f32> = points.iter().map(|point| point.wpm).collect();
     let recent = &points[points.len().saturating_sub(window)..];
+    // Both averages come from the same window, and the line names it: a mean
+    // accuracy over the last N next to a consistency over all N-hundred tests
+    // would be two different questions answered as if they were one.
+    let recent_speed: Vec<f32> = recent.iter().map(|point| point.wpm).collect();
     let accuracy = recent.iter().map(|point| point.accuracy).sum::<f32>() / recent.len() as f32;
     let best = stats::personal_best(&records, &filter).unwrap_or(0.0);
     let config = Config::load(&dirs.config_file())?;
@@ -312,8 +316,18 @@ fn stats_command(
     println!("{:<12} {}", "tests", points.len());
     println!("{:<12} {:.0}", "latest wpm", speed.last().copied().unwrap_or(0.0));
     println!("{:<12} {best:.0}", "best wpm");
-    println!("{:<12} {:.1}%", "accuracy", accuracy * 100.0);
-    println!("{:<12} {:.1}/5", "consistency", stats::consistency(&speed));
+    println!(
+        "{:<12} {:.1}%  (last {})",
+        "accuracy",
+        accuracy * 100.0,
+        recent.len()
+    );
+    println!(
+        "{:<12} {:.1}/5  (last {})",
+        "consistency",
+        stats::consistency(&recent_speed),
+        recent.len()
+    );
     println!("weakest keys");
     if keys.is_empty() {
         println!("  (no per-key data)");
@@ -407,26 +421,24 @@ fn reachability(config: &Config, layout_dir: &Path) -> String {
         );
     };
     let emulator = Emulator::new(host, target);
-    let missing = emulator.target().keys.len() - emulator.reachable().len();
-    if missing == 0 {
-        format!(
-            "reachability: {} -> {}: all positions reachable",
+    let unreachable = emulator.unreachable_chars();
+    if unreachable.is_empty() {
+        return format!(
+            "reachability: {} -> {}: every target character is reachable",
             config.host_layout, config.layout
-        )
-    } else {
-        let chars: String = emulator
-            .unreachable_chars()
-            .iter()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!(
-            "reachability: {} -> {}: {missing} unreachable position{} ({chars})",
-            config.host_layout,
-            config.layout,
-            if missing == 1 { "" } else { "s" }
-        )
+        );
     }
+    // The characters are named, and the reason is stated: a shared board shape
+    // is not enough, because a legend the host has no level for can never be
+    // typed — Colemak-DH's altgr `é` on a qwerty host is the usual case.
+    let chars: String = unreachable.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
+    format!(
+        "reachability: {} -> {}: {} unreachable character{} ({chars}) — no host keystroke produces them at their level, so lessons skip them",
+        config.host_layout,
+        config.layout,
+        unreachable.len(),
+        if unreachable.len() == 1 { "" } else { "s" }
+    )
 }
 
 /// The `doctor` report, kept pure so its format can be checked by tests.
@@ -498,8 +510,10 @@ mod tests {
     }
 
     #[test]
-    fn reachability_names_the_unreachable_characters() {
-        // azerty has no key at (3, 6), where colemak-dh puts 'h'.
+    fn reachability_names_the_unreachable_characters_and_why() {
+        // azerty has no key at (3, 6), where colemak-dh puts 'h'; and it has no
+        // altgr legends at all, so every altgr character of the target is out of
+        // reach even where the position exists.
         let config = Config {
             host_layout: "azerty".to_string(),
             layout: "colemak-dh".to_string(),
@@ -507,17 +521,32 @@ mod tests {
         };
         let line = reachability(&config, &empty_layout_dir());
         assert!(line.contains("reachability:"), "{line}");
-        assert!(line.contains("1 unreachable position"), "{line}");
+        assert!(line.contains("unreachable character"), "{line}");
+        assert!(line.contains("no host keystroke produces them"), "the reason is given: {line}");
         assert!(line.contains('h'), "the characters are named: {line}");
+        assert!(line.contains('é'), "a level gap is named too: {line}");
 
-        let identical = Config {
+        // A shared board shape is *not* enough: qwerty has no altgr legend, so
+        // colemak-dh's altgr characters stay out of reach.
+        let shared = Config {
             host_layout: "qwerty".to_string(),
             layout: "colemak-dh".to_string(),
             ..Config::default()
         };
+        let line = reachability(&shared, &empty_layout_dir());
+        assert!(!line.contains("all positions reachable"), "{line}");
+        assert!(line.contains('é'), "{line}");
+        assert!(!line.contains("(f "), "base letters are not listed: {line}");
+
+        // A layout emulated against itself really is fully reachable.
+        let identity = Config {
+            host_layout: "colemak-dh".to_string(),
+            layout: "colemak-dh".to_string(),
+            ..Config::default()
+        };
         assert!(
-            reachability(&identical, &empty_layout_dir()).contains("all positions reachable"),
-            "a shared board shape reaches everything"
+            reachability(&identity, &empty_layout_dir()).contains("every target character is reachable"),
+            "an identical host reaches every character"
         );
     }
 
@@ -533,7 +562,7 @@ mod tests {
             &Config::default(),
             "0.1.0",
             None,
-            "reachability: qwerty -> colemak-dh: all positions reachable",
+            "reachability: qwerty -> colemak-dh: every target character is reachable",
         );
         assert!(out.contains("reachability: qwerty -> colemak-dh"), "{out}");
     }

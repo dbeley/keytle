@@ -11,12 +11,15 @@
 //! host cannot produce on a position the target uses are simply out of reach:
 //! [`Emulator::unreachable_chars`] names them so lessons and the keyboard legend
 //! can leave those keys out instead of asking for impossible keystrokes.
+//!
 //! Reachability is a property of the *pair* (host, target) and is computed once
-//! in [`Emulator::new`]. It is positional — a target key counts if the host has
-//! *any* key at that spot — so an altgr legend such as Colemak-DH's `é` counts
-//! as reachable even though a bare qwerty host has no keystroke that produces
-//! it. Callers that need a character to actually arrive should pair
-//! [`Emulator::is_char_reachable`] with [`Emulator::translate`].
+//! in [`Emulator::new`]. It is **level-aware**: a target character counts only
+//! when the host key at that position carries a legend *at the same level*, so a
+//! keystroke can actually produce it. Colemak-DH's altgr `é` is therefore
+//! unreachable from a bare qwerty host, whose key at that spot has no altgr
+//! legend — the alphabet a lesson may use is exactly what [`Emulator::translate`]
+//! can return, never more. [`Emulator::reachable`] still answers the purely
+//! positional question, which is what the board legend draws.
 
 use crate::layout::{Key, Layout, Position};
 use std::collections::BTreeSet;
@@ -55,27 +58,51 @@ pub struct Emulator {
     host: Layout,
     target: Layout,
     reachable: BTreeSet<Position>,
+    producible: BTreeSet<char>,
 }
 
 impl Emulator {
     /// Pair two layouts and compute which target positions the host can press.
     pub fn new(host: Layout, target: Layout) -> Emulator {
-        let reachable = target
+        let reachable: BTreeSet<Position> = target
             .keys
             .keys()
             .filter(|pos| host.key_at(**pos).is_some())
             .copied()
             .collect();
+        // What a keystroke can actually deliver: a target legend counts only when
+        // the host key at that position has a legend at the same level.
+        let producible = target
+            .keys
+            .iter()
+            .filter_map(|(pos, target_key)| host.key_at(*pos).map(|host_key| (host_key, target_key)))
+            .flat_map(|(host_key, target_key)| {
+                [Level::Base, Level::Shift, Level::Altgr]
+                    .into_iter()
+                    .filter(|level| level.legend(host_key).is_some())
+                    .filter_map(|level| level.legend(target_key))
+            })
+            .collect();
         Emulator {
             host,
             target,
             reachable,
+            producible,
         }
     }
 
-    /// The target positions the host board also has a key for.
+    /// The target positions the host board also has a key for, whatever level the
+    /// character sits at. This is the positional question the board legend draws;
+    /// [`Emulator::reachable_chars`] is the stricter, level-aware one.
     pub fn reachable(&self) -> &BTreeSet<Position> {
         &self.reachable
+    }
+
+    /// Every target character a keystroke on the host can actually produce —
+    /// exactly the set [`Emulator::translate`] maps onto. This is the alphabet a
+    /// lesson may ask for.
+    pub fn reachable_chars(&self) -> BTreeSet<char> {
+        self.producible.clone()
     }
 
     /// The layout the user is typing on.
@@ -88,11 +115,13 @@ impl Emulator {
         &self.target
     }
 
-    /// Does `expected` sit on a position the host board can press?
+    /// Can a keystroke on the host board produce `expected`?
+    ///
+    /// A character is reachable only when the host has a legend at the level
+    /// `expected` occupies on the target: a position is not enough, because an
+    /// altgr `é` on a spot where the host has a plain letter can never be typed.
     pub fn is_char_reachable(&self, expected: char) -> bool {
-        self.target
-            .position_of_base(expected)
-            .is_some_and(|pos| self.reachable.contains(&pos))
+        self.producible.contains(&expected)
     }
 
     /// The target character produced by pressing whatever key types `typed` on
@@ -124,14 +153,14 @@ impl Emulator {
 
     /// Every character of the target layout that no keystroke on the host can
     /// produce, in row-major position order.
+    ///
+    /// Level-aware, like [`Emulator::is_char_reachable`]: a character the host
+    /// cannot reach *at its level* is named even when the position exists.
     pub fn unreachable_chars(&self) -> Vec<char> {
         let mut chars: Vec<char> = Vec::new();
-        for (pos, key) in &self.target.keys {
-            if self.reachable.contains(pos) {
-                continue;
-            }
+        for key in self.target.keys.values() {
             for c in [Some(key.base), key.shift, key.altgr].into_iter().flatten() {
-                if !chars.contains(&c) {
+                if !self.producible.contains(&c) && !chars.contains(&c) {
                     chars.push(c);
                 }
             }
@@ -199,11 +228,13 @@ mod tests {
         assert_eq!(e.host_char_for('é'), Some('w'), "the legend subscript");
         assert_eq!(e.host_char_for('p'), Some('e'));
 
-        assert_eq!(
-            e.unreachable_chars(),
-            Vec::<char>::new(),
-            "same board shape"
-        );
+        // Same board shape, so every position is pressable — and é, a *base*
+        // legend here, is genuinely typeable. bépo's altgr legends are not: a
+        // qwerty host has no altgr level to reach them with.
+        assert_eq!(e.reachable().len(), e.target().keys.len());
+        let unreachable = e.unreachable_chars();
+        assert!(!unreachable.contains(&'é'), "got {unreachable:?}");
+        assert!(unreachable.contains(&'€'), "got {unreachable:?}");
     }
 
     #[test]
@@ -241,20 +272,38 @@ mod tests {
 
         // The same gap under a different target names that target's letter.
         let e = emulator("azerty", "bepo");
-        assert_eq!(e.unreachable_chars(), vec!['q', 'Q']);
+        let unreachable = e.unreachable_chars();
+        assert!(unreachable.contains(&'q'), "got {unreachable:?}");
+        assert!(unreachable.contains(&'Q'), "its shifted form too");
+        assert!(!unreachable.contains(&'a'));
     }
 
     #[test]
-    fn a_shared_board_shape_leaves_nothing_unreachable() {
+    fn every_position_reachable_is_not_every_character_reachable() {
         let e = emulator("qwerty", "colemak-dh");
-        assert_eq!(e.reachable().len(), e.target().keys.len());
-        assert!(e.unreachable_chars().is_empty());
-        // Reachability is positional: colemak-dh carries é as an altgr legend on
-        // a shared key, so the position is reachable although no bare qwerty
-        // keystroke produces é (translate of é is None: qwerty has no such key).
-        assert!(e.is_char_reachable('é'));
+        assert_eq!(e.reachable().len(), e.target().keys.len(), "same shape");
+        // …but colemak-dh's altgr legends sit where qwerty has no altgr legend,
+        // so no keystroke can produce them: the position exists, the level does
+        // not. Reachability has to follow the level, or a lesson would ask for a
+        // character the typist cannot type.
+        assert!(e.is_char_reachable('f'), "a base letter is typeable");
+        assert!(!e.is_char_reachable('é'), "é is altgr, host has none");
+        assert!(!e.is_char_reachable('€'));
         assert_eq!(e.translate('é'), None);
-        assert!(e.is_char_reachable('f'));
+        assert_eq!(e.host_char_for('é'), None, "no keystroke for it");
+        let unreachable = e.unreachable_chars();
+        assert!(unreachable.contains(&'é'), "got {unreachable:?}");
+        assert!(!unreachable.contains(&'f'));
+        // The alphabet a lesson may use is exactly what translate can return.
+        let producible = e.reachable_chars();
+        assert!(producible.contains(&'f') && producible.contains(&'F'));
+        assert!(!producible.contains(&'é'));
+        // The host legend under each reachable character does produce it back.
+        for c in ['f', 'F', 'q', 'Q', ' '] {
+            assert!(producible.contains(&c), "{c:?} is reachable");
+            let host_char = e.host_char_for(c).expect("a host legend for it");
+            assert_eq!(e.translate(host_char), Some(c), "{c:?} via {host_char:?}");
+        }
     }
 
     #[test]

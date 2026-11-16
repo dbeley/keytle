@@ -161,15 +161,22 @@ fn export_jsonl_round_trips_both_fixture_records() {
 }
 
 #[test]
-fn doctor_reports_a_reachable_default_pair() {
+fn doctor_reports_the_default_pair_s_reachability_honestly() {
     let scratch = Scratch::new("doctor-reach");
     let out = scratch.run(&["doctor"]);
     let text = stdout(&out);
     assert!(out.status.success(), "doctor failed:\n{text}");
+    // The default pair shares a board shape, but qwerty has no altgr level, so
+    // colemak-dh's altgr characters are named rather than glossed over.
     assert!(
-        text.contains("reachability: qwerty -> colemak-dh: all positions reachable"),
-        "the default pair reaches every position:\n{text}"
+        text.contains("reachability: qwerty -> colemak-dh:"),
+        "the pair is named:\n{text}"
     );
+    assert!(
+        text.contains("unreachable character"),
+        "the gap is reported, not claimed away:\n{text}"
+    );
+    assert!(text.contains('é'), "the characters are named:\n{text}");
 }
 
 #[test]
