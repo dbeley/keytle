@@ -7,8 +7,19 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+/// The slowest and fastest speed a config may ask for, in words per minute.
+/// Below the floor the target interval runs away; above the ceiling it is
+/// untouchable, so both are treated as a typo rather than a wish.
+pub const MIN_TARGET_WPM: f32 = 10.0;
+pub const MAX_TARGET_WPM: f32 = 250.0;
+
+/// The shortest and longest lesson a config may ask for. Zero would generate an
+/// empty lesson and leave the drill with nothing to type.
+pub const MIN_LESSON_WORDS: usize = 1;
+pub const MAX_LESSON_WORDS: usize = 200;
 
 /// What the drill is made of. Written lowercase in the file: `pseudo`, `words`
 /// or `sentences`.
@@ -60,12 +71,24 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Read the config at `path`. A file that does not exist is not an error:
-    /// the defaults are returned instead.
+    /// Read the config at `path`, clamped to the ranges in [`Config::clamp`].
+    /// A file that does not exist is not an error: the defaults are returned
+    /// instead. The adjustments a clamp made are dropped; use
+    /// [`Config::load_reporting`] to hear about them.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
+        Self::load_reporting(path).map(|(config, _adjusted)| config)
+    }
+
+    /// Read the config at `path` and say which values had to be clamped, so a
+    /// caller can tell the typist that the file and the trainer now differ.
+    ///
+    /// Each entry reads `field old → new`, e.g. `target_wpm 0 → 10`.
+    pub fn load_reporting(path: &Path) -> Result<(Config, Vec<String>), ConfigError> {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Config::default()),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                return Ok((Config::default(), Vec::new()))
+            }
             Err(source) => {
                 return Err(ConfigError::Read {
                     path: path.to_path_buf(),
@@ -73,10 +96,44 @@ impl Config {
                 })
             }
         };
-        toml::from_str(&text).map_err(|source| ConfigError::Parse {
+        let mut config: Config = toml::from_str(&text).map_err(|source| ConfigError::Parse {
             path: path.to_path_buf(),
             source,
-        })
+        })?;
+        let adjusted = config.clamp();
+        Ok((config, adjusted))
+    }
+
+    /// Force every setting into a range the trainer can honour, describing each
+    /// value that changed.
+    ///
+    /// A `target_wpm` of 0 makes [`target_interval_ms`](Config::target_interval_ms)
+    /// divide by zero, and `lesson_words` of 0 makes `generate` hand back an
+    /// empty lesson. A hand-edited config is repaired here rather than left to
+    /// break the drill; the report is what lets the screen say so.
+    pub fn clamp(&mut self) -> Vec<String> {
+        let mut adjusted = Vec::new();
+        let wpm = if self.target_wpm.is_nan() {
+            MIN_TARGET_WPM
+        } else {
+            self.target_wpm.clamp(MIN_TARGET_WPM, MAX_TARGET_WPM)
+        };
+        if wpm != self.target_wpm {
+            adjusted.push(format!(
+                "target_wpm {} → {}",
+                show_f32(self.target_wpm),
+                show_f32(wpm)
+            ));
+            self.target_wpm = wpm;
+        }
+        let words = self
+            .lesson_words
+            .clamp(MIN_LESSON_WORDS, MAX_LESSON_WORDS);
+        if words != self.lesson_words {
+            adjusted.push(format!("lesson_words {} → {words}", self.lesson_words));
+            self.lesson_words = words;
+        }
+        adjusted
     }
 
     /// Write every field to `path` as TOML, creating the directory if needed.
@@ -84,6 +141,11 @@ impl Config {
     /// Every field is written, not just the ones that differ from the defaults:
     /// a saved config is a complete statement of what the trainer was set to,
     /// so reading it back cannot depend on what the defaults happened to be.
+    ///
+    /// The write is atomic, the way the profile's is: the TOML goes to
+    /// `<path>.tmp` in the same directory, is flushed to disk, and only then is
+    /// renamed over the target. Truncating in place would leave a crash with a
+    /// half-written file — that is, with no settings at all.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
         let text = toml::to_string(self).map_err(|err| ConfigError::Encode {
             path: path.to_path_buf(),
@@ -95,7 +157,26 @@ impl Config {
                 source,
             })?;
         }
-        fs::write(path, text).map_err(|source| ConfigError::Write {
+        let mut tmp_name = path.as_os_str().to_owned();
+        tmp_name.push(".tmp");
+        let tmp = PathBuf::from(tmp_name);
+        // An existing tmp left by an interrupted save is simply overwritten.
+        let write = || -> io::Result<()> {
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        };
+        if let Err(source) = write() {
+            let _ = fs::remove_file(&tmp);
+            return Err(ConfigError::Write {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+        fs::rename(&tmp, path).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+        .map_err(|source| ConfigError::Write {
             path: path.to_path_buf(),
             source,
         })
@@ -105,6 +186,21 @@ impl Config {
     /// characters per word.
     pub fn target_interval_ms(&self) -> f32 {
         60_000.0 / (5.0 * self.target_wpm)
+    }
+}
+
+/// One line naming every setting a clamp changed, for the screen to show.
+pub fn adjusted_notice(adjusted: &[String]) -> Option<String> {
+    (!adjusted.is_empty()).then(|| format!("settings adjusted: {}", adjusted.join(", ")))
+}
+
+/// A number as a person writes it: `10`, not `10.0`, and `NaN` rather than a
+/// panic when the file held something absurd.
+fn show_f32(value: f32) -> String {
+    if value.is_finite() && value == value.trunc() && value.abs() < 1e9 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
     }
 }
 
@@ -237,6 +333,132 @@ mod tests {
         assert!(nested.is_file());
         let _ = fs::remove_dir_all(path.with_file_name("nested"));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_zero_target_wpm_is_clamped_to_the_floor_and_reported() {
+        let file = ScratchFile::with("wpm0", "target_wpm = 0.0\n");
+        let (config, adjusted) = Config::load_reporting(file.path()).expect("a valid config");
+        assert_eq!(config.target_wpm, MIN_TARGET_WPM);
+        assert_eq!(adjusted, vec!["target_wpm 0 → 10".to_string()]);
+        assert_eq!(
+            config.target_interval_ms(),
+            60_000.0 / (5.0 * MIN_TARGET_WPM),
+            "the interval is finite, not a division by zero"
+        );
+        assert!(config.target_interval_ms().is_finite());
+        assert_eq!(Config::load(file.path()).unwrap(), config, "load clamps too");
+        assert_eq!(
+            adjusted_notice(&adjusted).as_deref(),
+            Some("settings adjusted: target_wpm 0 → 10")
+        );
+    }
+
+    #[test]
+    fn a_target_wpm_above_the_ceiling_is_clamped_to_it() {
+        let file = ScratchFile::with("wpm999", "target_wpm = 999.0\n");
+        let (config, adjusted) = Config::load_reporting(file.path()).expect("a valid config");
+        assert_eq!(config.target_wpm, MAX_TARGET_WPM);
+        assert_eq!(adjusted, vec!["target_wpm 999 → 250".to_string()]);
+    }
+
+    #[test]
+    fn a_zero_lesson_length_is_clamped_to_one_word_and_reported() {
+        let file = ScratchFile::with("words0", "lesson_words = 0\n");
+        let (config, adjusted) = Config::load_reporting(file.path()).expect("a valid config");
+        assert_eq!(config.lesson_words, MIN_LESSON_WORDS);
+        assert_eq!(adjusted, vec!["lesson_words 0 → 1".to_string()]);
+    }
+
+    #[test]
+    fn a_lesson_longer_than_the_ceiling_is_clamped_to_it() {
+        let file = ScratchFile::with("words999", "lesson_words = 999\n");
+        let (config, adjusted) = Config::load_reporting(file.path()).expect("a valid config");
+        assert_eq!(config.lesson_words, MAX_LESSON_WORDS);
+        assert_eq!(adjusted, vec!["lesson_words 999 → 200".to_string()]);
+    }
+
+    #[test]
+    fn a_value_inside_the_range_passes_through_untouched() {
+        let file = ScratchFile::with("inrange", "target_wpm = 62.0\nlesson_words = 35\n");
+        let (config, adjusted) = Config::load_reporting(file.path()).expect("a valid config");
+        assert_eq!(config.target_wpm, 62.0);
+        assert_eq!(config.lesson_words, 35);
+        assert!(adjusted.is_empty(), "nothing was changed, so nothing is said");
+        assert_eq!(adjusted_notice(&adjusted), None);
+        let defaults = Config::default();
+        assert!(defaults.target_wpm >= MIN_TARGET_WPM && defaults.target_wpm <= MAX_TARGET_WPM);
+        assert!(
+            defaults.lesson_words >= MIN_LESSON_WORDS
+                && defaults.lesson_words <= MAX_LESSON_WORDS
+        );
+    }
+
+    #[test]
+    fn a_degenerate_config_breaks_neither_the_interval_nor_the_lesson() {
+        // Both at once, as a hand-edited file could easily have them.
+        let mut config = Config {
+            target_wpm: 0.0,
+            lesson_words: 0,
+            ..Config::default()
+        };
+        let adjusted = config.clamp();
+        assert_eq!(adjusted.len(), 2, "{adjusted:?}");
+        assert_eq!(config.target_wpm, MIN_TARGET_WPM);
+        assert_eq!(config.lesson_words, MIN_LESSON_WORDS);
+        assert!(config.target_interval_ms().is_finite());
+    }
+
+    #[test]
+    fn the_clamp_is_idempotent_so_it_never_reports_twice() {
+        let mut config = Config {
+            target_wpm: 0.0,
+            lesson_words: 0,
+            ..Config::default()
+        };
+        assert_eq!(config.clamp().len(), 2);
+        assert!(config.clamp().is_empty(), "already in range, nothing to say");
+    }
+
+    #[test]
+    fn a_nan_target_wpm_is_repaired_rather_than_panicking() {
+        let mut config = Config {
+            target_wpm: f32::NAN,
+            ..Config::default()
+        };
+        let adjusted = config.clamp();
+        assert_eq!(config.target_wpm, MIN_TARGET_WPM);
+        assert_eq!(adjusted, vec!["target_wpm NaN → 10".to_string()]);
+    }
+
+    #[test]
+    fn an_existing_config_survives_a_save_and_no_tmp_is_left_behind() {
+        let dir = env::temp_dir().join(format!("keytle-config-{}-atomic", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        let first = Config::default();
+        first.save(&path).expect("first save");
+        let mut tmp_name = path.as_os_str().to_owned();
+        tmp_name.push(".tmp");
+        let tmp = PathBuf::from(tmp_name);
+
+        // A tmp left by an interrupted save must not be trusted: the next save
+        // replaces it, and the config that was on disk stays readable.
+        fs::write(&tmp, "target_wpm = [").expect("plant a tmp");
+        let second = Config {
+            target_wpm: 120.0,
+            lesson_words: 40,
+            ..Config::default()
+        };
+        second.save(&path).expect("second save");
+
+        assert_eq!(
+            Config::load(&path).expect("the config is still valid TOML"),
+            second,
+            "the new values are all there"
+        );
+        assert!(!tmp.exists(), "a .tmp file was left behind by {}", path.display());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

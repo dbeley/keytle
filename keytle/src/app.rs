@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use keytle_core::config::{Config, ConfigError, Mode};
+use keytle_core::config::{adjusted_notice, Config, ConfigError, Mode};
 use keytle_core::corpora;
 use keytle_core::corpus::{Corpus, CorpusError};
 use keytle_core::emulate::Emulator;
@@ -197,6 +197,9 @@ pub struct App {
     settings_row: usize,
     /// The settings as they were when the screen opened: `esc` puts them back.
     settings_backup: Option<Config>,
+    /// What a clamped load had to change, shown once on the settings screen and
+    /// then forgotten, so it is a report rather than a permanent banner.
+    settings_adjusted: Option<String>,
     /// The screen `?` was pressed on, so help closes back onto it.
     help_return: Screen,
 }
@@ -208,6 +211,10 @@ impl App {
     /// created, and saved best-effort so the next start finds it. Layout and
     /// corpus failures are real errors — without them there is no lesson.
     pub fn new(config: Config, paths: &Paths, now_ms: u64) -> Result<App, AppError> {
+        // Whatever the caller read off disk, what the app runs on is in range:
+        // a zero speed or an empty lesson would break the drill downstream.
+        let mut config = config;
+        let adjusted = config.clamp();
         let layout_dir = paths.layouts_dir();
         let layout = layouts::load(&config.layout, &layout_dir).map_err(|source| {
             AppError::Layout {
@@ -272,6 +279,7 @@ impl App {
             paths: paths.clone(),
             settings_row: 0,
             settings_backup: None,
+            settings_adjusted: adjusted_notice(&adjusted),
             help_return: Screen::Typing,
         };
         // The file's progress wins over the placeholder whenever there is one.
@@ -585,12 +593,23 @@ impl App {
         }
     }
 
+    /// Note that a load had to clamp values, so the settings screen can say so.
+    /// Shown once: [`App::open_settings`] takes it.
+    pub fn note_adjustments(&mut self, adjusted: &[String]) {
+        if let Some(notice) = adjusted_notice(adjusted) {
+            self.settings_adjusted = Some(notice);
+        }
+    }
+
     /// Open the settings screen, remembering the settings `esc` puts back.
+    ///
+    /// A clamped load is reported here, once: the settings screen is exactly
+    /// where the file and the trainer disagreeing matters.
     pub fn open_settings(&mut self) {
         self.settings_backup = Some(self.config.clone());
         self.settings_row = 0;
         self.screen = Screen::Settings;
-        self.notice = None;
+        self.notice = self.settings_adjusted.take();
     }
 
     /// Leave the settings screen without saving: restore the opening snapshot.
@@ -609,10 +628,19 @@ impl App {
     pub fn save_settings(&mut self, now_ms: u64) -> Result<PathBuf, ConfigError> {
         let path = self.paths.config_file();
         self.config.save(&path)?;
-        self.config = Config::load(&path)?;
+        let (config, adjusted) = Config::load_reporting(&path)?;
+        self.config = config;
         self.settings_backup = Some(self.config.clone());
+        // A value the file could not keep in range is said, not silently fixed.
+        let clamped = adjusted_notice(&adjusted).map(|notice| format!(" · {notice}"));
         match self.rebuild(now_ms) {
-            Ok(()) => self.notice = Some(format!("settings saved to {}", path.display())),
+            Ok(()) => {
+                self.notice = Some(format!(
+                    "settings saved to {}{}",
+                    path.display(),
+                    clamped.unwrap_or_default()
+                ))
+            }
             // The file is good; only the live reload failed. Say which.
             Err(err) => self.notice = Some(format!("saved to {}, but: {err}", path.display())),
         }
@@ -1188,6 +1216,45 @@ mod tests {
         app.session = Some(TypingSession::new("f", app.config.strict, 0));
         let action = app.handle_key(key(KeyCode::Char('e')), 100);
         assert_eq!(action, Action::Finish, "e on qwerty is f on Colemak-DH");
+    }
+
+    #[test]
+    fn a_clamped_config_is_reported_on_the_settings_screen_once() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.note_adjustments(&["target_wpm 0 → 10".to_string()]);
+        app.open_settings();
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("settings adjusted: target_wpm 0 → 10"),
+            "the screen says what the file cost"
+        );
+        // Once: closing and reopening the screen does not repeat it.
+        app.settings_move(1);
+        app.handle_key(key(KeyCode::Esc), 0);
+        app.open_settings();
+        assert_eq!(app.notice, None, "a report is shown once, not as a banner");
+    }
+
+    #[test]
+    fn an_out_of_range_config_is_clamped_before_it_reaches_the_drill() {
+        let scratch = Scratch::new();
+        let bad = Config {
+            target_wpm: 0.0,
+            lesson_words: 0,
+            ..Config::default()
+        };
+        let mut app = App::new(bad, &scratch.paths, 0).unwrap();
+        assert_eq!(app.config.target_wpm, keytle_core::config::MIN_TARGET_WPM);
+        assert_eq!(app.config.lesson_words, keytle_core::config::MIN_LESSON_WORDS);
+        assert!(app.config.target_interval_ms().is_finite());
+        // And the lesson it generates is not empty.
+        app.start_lesson(0);
+        let text = app.lesson.as_ref().unwrap().text.clone();
+        assert!(!text.trim().is_empty(), "lesson {text:?} has nothing to type");
+        app.note_adjustments(&["lesson_words 0 → 1".to_string()]);
+        app.open_settings();
+        assert_eq!(app.notice.as_deref(), Some("settings adjusted: lesson_words 0 → 1"));
     }
 
     #[test]

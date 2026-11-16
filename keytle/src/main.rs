@@ -155,9 +155,12 @@ impl Drop for TerminalGuard {
 /// Start the TUI: raw mode, alternate screen, and a loop that survives resizes.
 fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     let dirs = paths::paths();
-    let config = Config::load(&dirs.config_file())?;
+    // A hand-edited file may hold a value the drill cannot honour; loading says
+    // which ones it had to clamp, and the settings screen reports them once.
+    let (config, adjusted) = Config::load_reporting(&dirs.config_file())?;
     let started = now_ms();
     let mut app = App::new(config, &dirs, started)?;
+    app.note_adjustments(&adjusted);
 
     install_panic_hook();
     enable_raw_mode()?;
