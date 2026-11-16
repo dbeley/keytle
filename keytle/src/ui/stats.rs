@@ -1,27 +1,29 @@
 //! The stats dashboard: speed by **test index** (never by date), the per-key
 //! table, and the next unlock.
 //!
-//! Every number here is produced by [`keytle_core::stats`] — `series`,
+//! Every number here is produced by [`keytle_core::stats`] - `series`,
 //! `personal_best`, `consistency`, `key_rows`. The view's only job is to pick a
 //! width, choose glyphs and lay the result out; if this file ever starts folding
 //! records itself, the chart and `keytle stats` would be free to disagree.
 //!
 //! The X axis is the test number: a hundred tests in one afternoon are a hundred
-//! columns, and a week away leaves no gap. Session breaks — where the profile's
-//! unlock budget reset after [`SESSION_IDLE_MS`] of idle time — are marked with
+//! columns, and a week away leaves no gap. Session breaks - where the profile's
+//! session counter reset after [`SESSION_IDLE_MS`] of idle time - are marked with
 //! `┊` under the chart, and every test that unlocked a letter with `▲`, because
 //! those are the only parts of the history that are events rather than numbers.
 //! The personal best is a `━` line drawn across the speed chart at its own
 //! height, and `c` cycles the chart between speed, accuracy and both.
 
 use ratatui::layout::{Constraint, Layout as UiLayout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui::Frame;
 
 use keytle_core::engine::profile::SESSION_IDLE_MS;
-use keytle_core::stats::{self, Filter, KeyRow, Point, TestRecord};
+use keytle_core::stats::{
+    self, Filter, KeyRow, Point, TestRecord, MIN_COMPARABLE_KEYS, MIN_COMPARABLE_MS,
+};
 
 use crate::app::{parse_rfc3339 as parse_ts, App, ChartMode};
 use crate::ui::{fmt_duration, trend_glyph, unlock_line};
@@ -34,7 +36,7 @@ const KEY_WINDOW: usize = 20;
 const KEYS_PER_LINE: usize = 3;
 /// The eight levels a block glyph can show.
 const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/// Marks the first test after an idle gap long enough to reset the unlock budget.
+/// Marks the first test after an idle gap long enough to restart the session.
 const SESSION_MARK: char = '┊';
 /// Marks the test that unlocked a letter.
 const UNLOCK_MARK: char = '▲';
@@ -47,7 +49,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let filter = app.stats.to_filter(app.config.mode);
     let points = stats::series(&app.records, &filter);
     if points.is_empty() {
-        empty_state(frame, area, app);
+        empty_state(frame, area, app, &filter);
         return;
     }
     // The same predicate the store uses, so "total time" describes exactly the
@@ -55,7 +57,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let matching: Vec<&TestRecord> = app
         .records
         .iter()
-        .filter(|rec| filter.matches(rec))
+        .filter(|rec| filter.matches(rec) && rec.is_comparable())
         .collect();
     let total_ms: u64 = matching.iter().map(|rec| rec.duration_ms).sum::<u64>();
     let keys = stats::key_rows(
@@ -168,7 +170,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         accuracy * 100.0,
         stats::consistency(&speed),
         best.map(|wpm| format!("{wpm:.0} wpm"))
-            .unwrap_or_else(|| "—".to_string()),
+            .unwrap_or_else(|| "-".to_string()),
     );
     frame.render_widget(
         Paragraph::new(Line::from(summary))
@@ -313,7 +315,7 @@ fn best_line(shown: &[Point], mode: ChartMode) -> String {
         .filter(|point| value(point).is_finite())
         .max_by(|a, b| value(a).total_cmp(&value(b)))
     else {
-        return "pb —".to_string();
+        return "pb -".to_string();
     };
     if speed {
         format!("pb {PB_MARK} {:.0} wpm  ·  test {}", value(top), top.index)
@@ -323,7 +325,7 @@ fn best_line(shown: &[Point], mode: ChartMode) -> String {
 }
 
 /// Which tests begin a new session: the gap since the previous recorded test is
-/// at least [`SESSION_IDLE_MS`], the same rule that resets the unlock budget.
+/// at least [`SESSION_IDLE_MS`], the same rule that restarts the session.
 /// Positions are 0-based within `records`; test 0 is never a break.
 fn session_starts(records: &[&TestRecord]) -> Vec<usize> {
     let mut starts = Vec::new();
@@ -342,7 +344,7 @@ fn session_starts(records: &[&TestRecord]) -> Vec<usize> {
 }
 
 /// The test-number axis: `tests` and then every tenth index under its column.
-/// Never a date — the axis is the count of tests taken.
+/// Never a date - the axis is the count of tests taken.
 fn axis_line(points: &[Point], width: usize) -> String {
     let mut row = vec![' '; width];
     for (i, ch) in "tests".chars().enumerate() {
@@ -374,14 +376,13 @@ fn axis_line(points: &[Point], width: usize) -> String {
 fn key_lines(app: &App, rows: &[KeyRow]) -> Vec<Line<'static>> {
     if rows.is_empty() {
         return vec![Line::from(Span::styled(
-            "no per-key evidence yet — finish a lesson",
+            "no per-key evidence yet - finish a lesson",
             Style::new().fg(Color::DarkGray),
         ))];
     }
     let unlocked = &app.profile.unlocked;
     rows.chunks(KEYS_PER_LINE)
-        .enumerate()
-        .map(|(line_no, chunk)| {
+        .map(|chunk| {
             let mut spans = Vec::new();
             for row in chunk {
                 let style = if unlocked.contains(&row.ch) {
@@ -400,12 +401,6 @@ fn key_lines(app: &App, rows: &[KeyRow]) -> Vec<Line<'static>> {
                     style,
                 ));
             }
-            if line_no == 0 {
-                spans.push(Span::styled(
-                    "◀ weakest",
-                    Style::new().fg(Color::Yellow).add_modifier(Modifier::DIM),
-                ));
-            }
             Line::from(spans)
         })
         .collect()
@@ -413,13 +408,20 @@ fn key_lines(app: &App, rows: &[KeyRow]) -> Vec<Line<'static>> {
 
 /// No tests at all is a state, not an error: say what to do about it. A history
 /// that could not be read says so first, because "no tests" would be a lie.
-fn empty_state(frame: &mut Frame, area: Rect, app: &App) {
+fn empty_state(frame: &mut Frame, area: Rect, app: &App, filter: &Filter) {
     let why = if let Some(err) = app.history_error() {
         err
     } else if app.records.is_empty() {
-        "no tests yet — finish a lesson and come back".to_string()
+        "no tests yet - finish a lesson and come back".to_string()
+    } else if app.records.iter().any(|rec| filter.matches(rec)) {
+        // History exists for this selection, but none of it is chartable: a
+        // burst of five seconds reports a speed that belongs to the warm-up.
+        format!(
+            "no test long enough to chart - {} s and {MIN_COMPARABLE_KEYS} keystrokes are the floor",
+            MIN_COMPARABLE_MS / 1000
+        )
     } else {
-        "no tests match this filter — press s or a to widen it".to_string()
+        "no tests match this filter - press s or a to widen it".to_string()
     };
     let lines = vec![
         Line::from(Span::styled(why, Style::new().fg(Color::Yellow))),
@@ -474,6 +476,17 @@ mod tests {
 
     fn record(ts: &str, wpm: f32, key: Option<(char, KeyAgg)>) -> TestRecord {
         let mut keys = BTreeMap::new();
+        // A test has to clear the charting floor to get a column: 60 keystrokes
+        // on one key stands in for a full lesson here.
+        keys.insert(
+            'e',
+            KeyAgg {
+                hits: 58,
+                misses: 2,
+                shift_misses: 0,
+                mean_dt: 150,
+            },
+        );
         if let Some((ch, agg)) = key {
             keys.insert(ch, agg);
         }

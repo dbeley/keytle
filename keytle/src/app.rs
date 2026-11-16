@@ -8,12 +8,12 @@
 //! The key map is deliberately small: `esc` abandons a lesson without recording
 //! it, `tab` restarts, `q` quits only from the idle typing screen (while a lesson
 //! runs, `q` is a letter to type), and `ctrl-c` always quits. Every other
-//! character is fed to the session — after positional translation when emulation
+//! character is fed to the session - after positional translation when emulation
 //! is on, because the terminal reports the *host* layout's character.
 //!
 //! Nothing in the key map unlocks a letter: progression is the engine's alone,
 //! decided from the evidence of finished lessons (see [`App::finish_lesson`]).
-//! A typist cannot skip ahead by pressing a key, and cannot pin a set either — a
+//! A typist cannot skip ahead by pressing a key, and cannot pin a set either - a
 //! profile that disagrees with the lessons is impossible to produce by hand.
 
 use std::collections::BTreeSet;
@@ -36,7 +36,7 @@ use keytle_core::typing::{SessionStats, TypingSession};
 /// Which screen is in front.
 ///
 /// `Typing` is home: `s` opens the dashboard from it, `?` the help, and `esc`
-/// or `q` closes both again — always back to typing, because that is the screen
+/// or `q` closes both again - always back to typing, because that is the screen
 /// a lesson starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -243,7 +243,7 @@ impl App {
     ///
     /// A profile that cannot be read is not an error on first run: a fresh one is
     /// created, and saved best-effort so the next start finds it. Layout and
-    /// corpus failures are real errors — without them there is no lesson.
+    /// corpus failures are real errors - without them there is no lesson.
     pub fn new(config: Config, paths: &Paths, now_ms: u64) -> Result<App, AppError> {
         // Whatever the caller read off disk, what the app runs on is in range:
         // a zero speed or an empty lesson would break the drill downstream.
@@ -374,7 +374,7 @@ impl App {
                     // stats line. The screen stays idle and ready.
                     self.lesson = None;
                     self.last_miss = None;
-                    self.notice = Some("lesson abandoned — nothing recorded".to_string());
+                    self.notice = Some("lesson abandoned - nothing recorded".to_string());
                 }
                 Action::Redraw
             }
@@ -430,7 +430,7 @@ impl App {
                         session.ignore_input();
                     }
                     self.notice = Some(format!(
-                        "{typed} ignored — the target layout has no key at that level"
+                        "{typed} ignored - the target layout has no key at that level"
                     ));
                     return Action::Redraw;
                 }
@@ -475,7 +475,7 @@ impl App {
         if lesson.text.is_empty() {
             self.session = None;
             self.lesson = None;
-            self.notice = Some("no typable text for these keys — check the layout".to_string());
+            self.notice = Some("no typable text for these keys - check the layout".to_string());
             return;
         }
         self.notice = lesson.note.map(note_text);
@@ -523,7 +523,7 @@ impl App {
             unlocked_after,
         };
         let mut notice = format!(
-            "lesson done — {:.0} wpm, {:.0}% accuracy",
+            "lesson done - {:.0} wpm, {:.0}% accuracy",
             stats.net_wpm,
             stats.accuracy * 100.0
         );
@@ -612,7 +612,7 @@ impl App {
     /// has been left alone long enough starts the next lesson by itself.
     ///
     /// Nothing happens while a lesson runs, on any other screen, or when
-    /// `auto_next` is off — those states have their own ways forward.
+    /// `auto_next` is off - those states have their own ways forward.
     pub fn tick(&mut self, now_ms: u64) -> Action {
         self.clock_ms = now_ms;
         self.expire_notice(now_ms);
@@ -676,7 +676,7 @@ impl App {
             Ok(profile) => profile,
             Err(err) => {
                 // A missing file is simply a first run: there is nothing to lose
-                // and nothing to say. An unreadable or corrupt one is not — it
+                // and nothing to say. An unreadable or corrupt one is not - it
                 // held the learner's progress, and the fresh profile saved below
                 // overwrites it, so a copy is kept and the loss is said out loud
                 // instead of being swallowed.
@@ -694,11 +694,11 @@ impl App {
                         Some(format!("profile not saved: {save_err}"))
                     }
                     (false, Some(Ok(copy)), _) => Some(format!(
-                        "profile could not be read ({err}) — kept a copy at {} and started fresh",
+                        "profile could not be read ({err}) - kept a copy at {} and started fresh",
                         copy.display()
                     )),
                     (false, Some(Err(copy_err)), _) => Some(format!(
-                        "profile could not be read ({err}) — could not back it up ({copy_err}) — started fresh"
+                        "profile could not be read ({err}) - could not back it up ({copy_err}) - started fresh"
                     )),
                     (false, None, Ok(())) => Some(err.to_string()),
                     (false, None, Err(save_err)) => Some(format!("{err} · not saved: {save_err}")),
@@ -749,7 +749,7 @@ impl App {
     }
 
     /// Write the edited settings to the config file, then read them back from
-    /// it — so what the screen shows is exactly what a restart would load.
+    /// it - so what the screen shows is exactly what a restart would load.
     pub fn save_settings(&mut self, now_ms: u64) -> Result<PathBuf, ConfigError> {
         let path = self.paths.config_file();
         self.config.save(&path)?;
@@ -895,7 +895,7 @@ impl App {
     pub fn history_error(&self) -> Option<String> {
         self.history_error
             .as_ref()
-            .map(|err| format!("history could not be read: {err} — new tests are still recorded"))
+            .map(|err| format!("history could not be read: {err} - new tests are still recorded"))
     }
 
     /// What the unlock rule would say right now, with the letter it is about.
@@ -926,11 +926,21 @@ impl App {
             lang: Some(self.config.language.clone()),
             mode: Some(self.config.mode),
         };
-        let points = stats::series(&self.records, &filter);
-        let speed: Vec<f32> = points.iter().map(|point| point.wpm).collect();
+        // Tests and the latest speed come from the whole history; only the
+        // numbers that would be skewed by a five-second warm-up (best,
+        // consistency) honour the charting floor.
+        let matching: Vec<&keytle_core::stats::TestRecord> = self
+            .records
+            .iter()
+            .filter(|rec| filter.matches(rec))
+            .collect();
+        let speed: Vec<f32> = stats::series(&self.records, &filter)
+            .iter()
+            .map(|point| point.wpm)
+            .collect();
         HomeSummary {
-            tests: points.len(),
-            latest_wpm: speed.last().copied().unwrap_or(0.0),
+            tests: matching.len(),
+            latest_wpm: matching.last().map_or(0.0, |rec| rec.wpm),
             best_wpm: stats::personal_best(&self.records, &filter),
             consistency: stats::consistency(&speed),
             weakest: stats::key_rows(
@@ -1225,9 +1235,9 @@ fn backup_corrupt(path: &Path) -> io::Result<PathBuf> {
 
 fn note_text(note: Note) -> String {
     match note {
-        Note::FallbackToPseudo => "too few usable words — drilling pseudo words".to_string(),
+        Note::FallbackToPseudo => "too few usable words - drilling pseudo words".to_string(),
         Note::FullAlphabetSentences => {
-            "too few usable sentences — every letter allowed".to_string()
+            "too few usable sentences - every letter allowed".to_string()
         }
         Note::SentencesDropped { dropped, total } => {
             format!("{dropped} of {total} sentences skipped: the unlocked keys cannot type them")
@@ -1609,9 +1619,43 @@ mod tests {
         assert_eq!(app.home_summary().tests, 0, "a fresh install has no tests");
         finish_one_lesson(&mut app, 0);
         let summary = app.home_summary();
-        assert_eq!(summary.tests, 1);
+        assert_eq!(summary.tests, 1, "a test counts as soon as it is recorded");
         assert!(summary.latest_wpm > 0.0, "{summary:?}");
-        assert_eq!(summary.best_wpm, Some(summary.latest_wpm));
+        // Typed instantly in this test, so it is under the charting floor: the
+        // panel counts it but does not crown it as a personal best.
+        assert_eq!(summary.best_wpm, None);
+
+        // A test at a human pace is comparable, and becomes the best.
+        let mut keys = std::collections::BTreeMap::new();
+        keys.insert(
+            'e',
+            keytle_core::typing::KeyAgg {
+                hits: 60,
+                misses: 1,
+                shift_misses: 0,
+                mean_dt: 150,
+            },
+        );
+        app.records.push(keytle_core::stats::TestRecord {
+            v: keytle_core::stats::RECORD_VERSION,
+            ts: "2026-11-16T10:00:00Z".to_string(),
+            layout: app.config.layout.clone(),
+            host: app.config.host_layout.clone(),
+            emulated: app.config.emulate,
+            lang: app.config.language.clone(),
+            mode: app.config.mode,
+            lesson: 1,
+            wpm: 61.0,
+            raw_wpm: 63.0,
+            accuracy: 0.98,
+            duration_ms: 60_000,
+            keys,
+            unlocked_before: 4,
+            unlocked_after: 5,
+        });
+        let summary = app.home_summary();
+        assert_eq!(summary.tests, 2);
+        assert_eq!(summary.best_wpm, Some(61.0));
         // The weakest keys name letters, never the space bar.
         assert!(
             summary.weakest.iter().all(|row| !row.ch.is_whitespace()),
@@ -1873,7 +1917,7 @@ mod tests {
             ..Config::default()
         };
         // qwerty host, colemak-dh target: é and ç are altgr legends there, and a
-        // qwerty board has no altgr level — so no keystroke can ever produce them.
+        // qwerty board has no altgr level - so no keystroke can ever produce them.
         let mut app = App::new(config, &scratch.paths, 0).unwrap();
         assert!(app.layout.contains_char('é'), "colemak-dh carries é");
         assert!(
@@ -1958,7 +2002,7 @@ mod tests {
         app.start_lesson(0);
         app.session = Some(TypingSession::new("f", app.config.strict, 0));
         // é is not typeable on a qwerty host, so this is not a typo: the stroke
-        // is ignored — and the learner is told, rather than left wondering.
+        // is ignored - and the learner is told, rather than left wondering.
         let action = app.handle_key(key(KeyCode::Char('é')), 100);
         assert_eq!(action, Action::Redraw);
         let notice = app.notice.clone().expect("an ignored stroke is said");

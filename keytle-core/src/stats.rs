@@ -3,7 +3,7 @@
 //!
 //! One test is one line. That is the whole schema decision: the file is the
 //! history, newest last, and every view is a fold over it. Nothing is rewritten,
-//! so a crash mid-append costs at most the line being written — which
+//! so a crash mid-append costs at most the line being written - which
 //! [`read_all`] skips with a warning instead of refusing to start.
 //!
 //! **The X axis is the test index**, never the date. A hundred tests in one
@@ -14,7 +14,7 @@
 //!
 //! Two consequences are pinned by tests below:
 //!
-//! * personal bests are per `(layout, language, mode)` — sentence mode is not
+//! * personal bests are per `(layout, language, mode)` - sentence mode is not
 //!   comparable to pseudo-words, so merging them would be a lie;
 //! * [`consistency`] is computed from *per-test* WPM, so a steady typist scores
 //!   high and a spiky one low even if their averages match.
@@ -94,7 +94,7 @@ pub fn append(path: &Path, rec: &TestRecord) -> io::Result<()> {
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     // The newline belongs to the line: one `write_all` per record, so a second
     // O_APPEND writer can never land between the object and its terminator and
-    // put two objects on one line — which `read_all` treats as fatal.
+    // put two objects on one line - which `read_all` treats as fatal.
     line.push('\n');
     if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
@@ -182,7 +182,7 @@ pub struct Point {
 pub fn series(records: &[TestRecord], filter: &Filter) -> Vec<Point> {
     records
         .iter()
-        .filter(|rec| filter.matches(rec))
+        .filter(|rec| filter.matches(rec) && rec.is_comparable())
         .enumerate()
         .map(|(i, rec)| Point {
             // The index is the test number in file order, not a date bucket: a
@@ -195,11 +195,35 @@ pub fn series(records: &[TestRecord], filter: &Filter) -> Vec<Point> {
         .collect()
 }
 
+/// A test must run this long to be charted.
+pub const MIN_COMPARABLE_MS: u64 = 10_000;
+/// ... and have this many keystrokes. A five-second burst of a dozen words
+/// reports a flattering speed that belongs to the easing-in, not to the typist,
+/// and one such point also rescales the whole speed chart.
+pub const MIN_COMPARABLE_KEYS: u32 = 50;
+
+impl TestRecord {
+    /// Every keystroke the test charged to a key, right or wrong.
+    pub fn keystrokes(&self) -> u32 {
+        self.keys
+            .values()
+            .map(|agg| agg.hits + agg.misses)
+            .sum::<u32>()
+    }
+
+    /// Whether this test is long and large enough for its speed to be compared
+    /// with the others. Short tests stay in the file and count for the per-key
+    /// table; they just do not get a column of their own.
+    pub fn is_comparable(&self) -> bool {
+        self.duration_ms >= MIN_COMPARABLE_MS && self.keystrokes() >= MIN_COMPARABLE_KEYS
+    }
+}
+
 /// The best net WPM of the filtered series, or `None` before the first test.
 pub fn personal_best(records: &[TestRecord], filter: &Filter) -> Option<f32> {
     records
         .iter()
-        .filter(|rec| filter.matches(rec))
+        .filter(|rec| filter.matches(rec) && rec.is_comparable())
         .map(|rec| rec.wpm)
         .filter(|wpm| wpm.is_finite())
         .reduce(f32::max)
@@ -207,7 +231,7 @@ pub fn personal_best(records: &[TestRecord], filter: &Filter) -> Option<f32> {
 
 /// How steady the speed was, on a 0–5 scale: `(1 - cv) * 5`, clamped.
 ///
-/// A single test (or none) has no spread to speak of and scores `5.0` — the
+/// A single test (or none) has no spread to speak of and scores `5.0` - the
 /// scale is about the absence of variance, not about the size of the numbers.
 pub fn consistency(wpms: &[f32]) -> f32 {
     let n = wpms.len();
@@ -387,7 +411,7 @@ impl Totals {
     fn trend(&self) -> Trend {
         // Faster is better, and shorter intervals are faster: a smaller mean
         // interval on the newer half means the key is improving. Accuracy is
-        // deliberately not consulted here — it is reported on its own column,
+        // deliberately not consulted here - it is reported on its own column,
         // and mixing it in made "improving" claim things the intervals deny.
         match (self.older_acc.mean_dt(), self.newer_acc.mean_dt()) {
             (Some(older), Some(newer)) if older - newer > TREND_EPSILON => Trend::Up,
@@ -427,7 +451,7 @@ const TSV_COLUMNS: [&str; 13] = [
 ];
 
 /// The history as TSV: a header row, then one row per record. Per-key totals
-/// are left out — they are a nested map, and a spreadsheet column would have to
+/// are left out - they are a nested map, and a spreadsheet column would have to
 /// lie about that; JSONL is the lossless export.
 pub fn export_tsv(records: &[TestRecord]) -> String {
     let mut out = TSV_COLUMNS.join("\t");
@@ -525,6 +549,14 @@ mod tests {
             unlocked_before: 4,
             unlocked_after: 5,
         }
+    }
+
+    /// A record that clears the charting floor (10 s, 50 keystrokes), for the
+    /// tests that are about the series, the personal best or consistency.
+    fn charted(ts: &str, mode: Mode, wpm: f32, g: f32) -> TestRecord {
+        let mut rec = record(ts, mode, wpm, g);
+        rec.keys = [('e', key(60, 1, 150))].into_iter().collect();
+        rec
     }
 
     /// A record carrying one key's evidence, for the per-key tests.
@@ -671,13 +703,32 @@ mod tests {
     }
 
     #[test]
+    fn a_test_under_the_floor_is_counted_but_not_charted() {
+        let mut short = record("2026-11-15T09:00:00Z", Mode::Words, 95.0, 0.0);
+        short.duration_ms = 4_900;
+        short.keys = [('e', key(39, 0, 150))].into_iter().collect();
+        let records = vec![
+            short,
+            charted("2026-11-15T09:05:00Z", Mode::Words, 60.0, 0.0),
+        ];
+        let points = series(&records, &Filter::default());
+        assert_eq!(points.len(), 1, "only the full-length test is a column");
+        assert_eq!(points[0].wpm, 60.0);
+        assert_eq!(
+            personal_best(&records, &Filter::default()),
+            Some(60.0),
+            "a five-second burst is not a personal best"
+        );
+    }
+
+    #[test]
     fn series_is_indexed_by_test_not_by_date() {
         // Three tests over two days: two on the 15th, one on the 17th. The index
         // is the test number, so the missing 16th leaves no gap and no bucket.
         let records = vec![
-            record("2026-11-15T09:00:00Z", Mode::Pseudo, 40.0, 0.0),
-            record("2026-11-15T09:10:00Z", Mode::Pseudo, 50.0, 0.0),
-            record("2026-11-17T21:00:00Z", Mode::Pseudo, 60.0, 0.0),
+            charted("2026-11-15T09:00:00Z", Mode::Pseudo, 40.0, 0.0),
+            charted("2026-11-15T09:10:00Z", Mode::Pseudo, 50.0, 0.0),
+            charted("2026-11-17T21:00:00Z", Mode::Pseudo, 60.0, 0.0),
         ];
         let points = series(&records, &Filter::default());
         assert_eq!(
@@ -695,7 +746,7 @@ mod tests {
     fn a_hundred_tests_in_one_day_are_a_hundred_points() {
         let records: Vec<TestRecord> = (0..100)
             .map(|i| {
-                record(
+                charted(
                     &format!("2026-11-15T09:{:02}:00Z", i % 60),
                     Mode::Pseudo,
                     i as f32,
@@ -711,9 +762,9 @@ mod tests {
     #[test]
     fn series_filters_by_mode() {
         let records = vec![
-            record("2026-11-15T09:00:00Z", Mode::Pseudo, 40.0, 0.0),
-            record("2026-11-15T09:10:00Z", Mode::Sentences, 30.0, 0.0),
-            record("2026-11-15T09:20:00Z", Mode::Pseudo, 45.0, 0.0),
+            charted("2026-11-15T09:00:00Z", Mode::Pseudo, 40.0, 0.0),
+            charted("2026-11-15T09:10:00Z", Mode::Sentences, 30.0, 0.0),
+            charted("2026-11-15T09:20:00Z", Mode::Pseudo, 45.0, 0.0),
         ];
         let filter = Filter {
             mode: Some(Mode::Sentences),
@@ -727,12 +778,12 @@ mod tests {
 
     #[test]
     fn series_filters_by_layout_and_language() {
-        let mut other = record("2026-11-15T09:30:00Z", Mode::Pseudo, 99.0, 0.0);
+        let mut other = charted("2026-11-15T09:30:00Z", Mode::Pseudo, 99.0, 0.0);
         other.layout = "bepo".to_string();
-        let mut french = record("2026-11-15T09:40:00Z", Mode::Pseudo, 88.0, 0.0);
+        let mut french = charted("2026-11-15T09:40:00Z", Mode::Pseudo, 88.0, 0.0);
         french.lang = "fr".to_string();
         let records = vec![
-            record("2026-11-15T09:00:00Z", Mode::Pseudo, 40.0, 0.0),
+            charted("2026-11-15T09:00:00Z", Mode::Pseudo, 40.0, 0.0),
             other,
             french,
         ];
@@ -759,9 +810,9 @@ mod tests {
     #[test]
     fn personal_best_is_per_series_never_merged_across_modes() {
         let records = vec![
-            record("2026-11-15T09:00:00Z", Mode::Pseudo, 60.0, 0.0),
-            record("2026-11-15T09:10:00Z", Mode::Pseudo, 71.0, 0.0),
-            record("2026-11-15T09:20:00Z", Mode::Sentences, 44.0, 0.0),
+            charted("2026-11-15T09:00:00Z", Mode::Pseudo, 60.0, 0.0),
+            charted("2026-11-15T09:10:00Z", Mode::Pseudo, 71.0, 0.0),
+            charted("2026-11-15T09:20:00Z", Mode::Sentences, 44.0, 0.0),
         ];
         let pseudo = Filter {
             mode: Some(Mode::Pseudo),
@@ -850,7 +901,7 @@ mod tests {
 
     #[test]
     fn identical_accuracy_but_a_faster_newer_half_trends_up() {
-        // Grades never move — 9 hits, 1 miss on both sides — but the key is
+        // Grades never move - 9 hits, 1 miss on both sides - but the key is
         // typed twice as fast in the newer half. That is improvement.
         let records = vec![
             with_key("2026-11-15T09:00:00Z", 'e', key(9, 1, 240)),

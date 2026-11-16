@@ -1,6 +1,6 @@
 //! End-to-end tests: the real binary, in scratch data and config directories.
 //!
-//! Nothing here starts the TUI — every case is one of the plain-stdout
+//! Nothing here starts the TUI - every case is one of the plain-stdout
 //! subcommands, which is exactly what a script or a Nix check would run.
 
 use std::path::PathBuf;
@@ -69,9 +69,9 @@ impl Drop for Scratch {
 
 /// Two completed lessons, in the shape the app writes them.
 const FIXTURE: &str = concat!(
-    r#"{"v":1,"ts":"2026-11-15T10:00:00Z","layout":"colemak-dh","host":"qwerty","emulated":true,"lang":"en","mode":"pseudo","lesson":0,"wpm":40.0,"raw_wpm":44.0,"accuracy":0.96,"duration_ms":30000,"keys":{},"unlocked_before":4,"unlocked_after":5}"#,
+    r#"{"v":1,"ts":"2026-11-15T10:00:00Z","layout":"colemak-dh","host":"qwerty","emulated":true,"lang":"en","mode":"pseudo","lesson":0,"wpm":40.0,"raw_wpm":44.0,"accuracy":0.96,"duration_ms":30000,"keys":{"e":{"hits":60,"misses":1,"shift_misses":0,"mean_dt":150}},"unlocked_before":4,"unlocked_after":5}"#,
     "\n",
-    r#"{"v":1,"ts":"2026-11-15T10:05:00Z","layout":"colemak-dh","host":"qwerty","emulated":true,"lang":"en","mode":"pseudo","lesson":1,"wpm":48.0,"raw_wpm":52.0,"accuracy":0.97,"duration_ms":30000,"keys":{},"unlocked_before":5,"unlocked_after":6}"#,
+    r#"{"v":1,"ts":"2026-11-15T10:05:00Z","layout":"colemak-dh","host":"qwerty","emulated":true,"lang":"en","mode":"pseudo","lesson":1,"wpm":48.0,"raw_wpm":52.0,"accuracy":0.97,"duration_ms":30000,"keys":{"e":{"hits":60,"misses":1,"shift_misses":0,"mean_dt":150}},"unlocked_before":5,"unlocked_after":6}"#,
     "\n",
 );
 
@@ -153,7 +153,7 @@ fn export_jsonl_round_trips_both_fixture_records() {
         "one JSON object per line:\n{text}"
     );
     // Round-trip through the same reader the app uses, so each exported line
-    // has to be a complete, well-formed record — not merely valid JSON.
+    // has to be a complete, well-formed record - not merely valid JSON.
     let path = scratch.base.join("roundtrip.jsonl");
     std::fs::write(&path, &text).expect("the exported text");
     let parsed = keytle_core::stats::read_all(&path).expect("every exported line parses");
