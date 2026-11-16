@@ -61,6 +61,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
+    if let Some(err) = app.history_error() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(err, Style::new().fg(Color::Yellow))));
+    }
+
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "enter or tab starts another lesson  ·  s shows your progress  ·  esc back",

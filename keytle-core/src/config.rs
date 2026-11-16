@@ -31,7 +31,7 @@ impl fmt::Display for Mode {
 }
 
 /// The resolved settings. Missing keys fall back to [`Config::default`].
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
     pub layout: String,
@@ -79,6 +79,28 @@ impl Config {
         })
     }
 
+    /// Write every field to `path` as TOML, creating the directory if needed.
+    ///
+    /// Every field is written, not just the ones that differ from the defaults:
+    /// a saved config is a complete statement of what the trainer was set to,
+    /// so reading it back cannot depend on what the defaults happened to be.
+    pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+        let text = toml::to_string(self).map_err(|err| ConfigError::Encode {
+            path: path.to_path_buf(),
+            reason: err.to_string(),
+        })?;
+        if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            fs::create_dir_all(dir).map_err(|source| ConfigError::Write {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        }
+        fs::write(path, text).map_err(|source| ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
     /// How long one keystroke may take to match the target speed, counting five
     /// characters per word.
     pub fn target_interval_ms(&self) -> f32 {
@@ -102,6 +124,14 @@ pub enum ConfigError {
         #[source]
         source: toml::de::Error,
     },
+    #[error("cannot write {path}: {source}", path = .path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("cannot encode config for {path}: {reason}", path = .path.display())]
+    Encode { path: PathBuf, reason: String },
 }
 
 #[cfg(test)]
@@ -180,6 +210,33 @@ mod tests {
         let config = Config::load(file.path()).expect("a valid config");
         assert_eq!(config.mode, Mode::Words);
         assert_eq!(Mode::Sentences.to_string(), "sentences");
+    }
+
+    #[test]
+    fn a_saved_config_reads_back_as_the_same_values() {
+        let path = env::temp_dir().join(format!("keytle-config-{}-saved.toml", process::id()));
+        let original = Config {
+            layout: "bepo".to_string(),
+            host_layout: "azerty".to_string(),
+            language: "fr".to_string(),
+            mode: Mode::Sentences,
+            emulate: false,
+            strict: false,
+            lesson_words: 35,
+            target_wpm: 62.0,
+        };
+        original.save(&path).expect("save");
+        assert_eq!(
+            Config::load(&path).expect("reload"),
+            original,
+            "every field survives the round trip"
+        );
+        // The directory is created, so a first save from a fresh install works.
+        let nested = path.with_file_name("nested/config.toml");
+        original.save(&nested).expect("save into a new directory");
+        assert!(nested.is_file());
+        let _ = fs::remove_dir_all(path.with_file_name("nested"));
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

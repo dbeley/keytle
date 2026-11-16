@@ -818,8 +818,9 @@ impl App {
     }
 
     /// Keys the settings screen owns: `w` saves, `esc`/`q` throw the edits away,
-    /// `j`/`k` (or the up/down arrows) move the cursor, and `space`, `enter` or
-    /// the left/right arrows step the selected value.
+    /// `j`/`k` (or the up/down arrows) move the cursor, and `space`, `enter`,
+    /// `l` or the right arrow step the selected value forward while `h` or the
+    /// left arrow step it back.
     fn settings_key(&mut self, key: KeyEvent, now_ms: u64) -> Action {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.discard_settings(now_ms),
@@ -830,8 +831,12 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => self.settings_move(1),
             KeyCode::Char('k') | KeyCode::Up => self.settings_move(-1),
-            KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Right => self.settings_cycle(now_ms, true),
-            KeyCode::Left | KeyCode::Backspace => self.settings_cycle(now_ms, false),
+            KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                self.settings_cycle(now_ms, true)
+            }
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => {
+                self.settings_cycle(now_ms, false)
+            }
             _ => {}
         }
         Action::Redraw
@@ -1257,6 +1262,54 @@ mod tests {
     }
 
     #[test]
+    fn h_and_l_step_the_settings_value_by_keys() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.handle_key(key(KeyCode::Char(',')), 0);
+        assert_eq!(app.screen, Screen::Settings);
+        // Row 0 is the layout: `l` steps forward, `h` steps back to it.
+        let first = app.config.layout.clone();
+        app.handle_key(key(KeyCode::Char('l')), 0);
+        assert_ne!(app.config.layout, first, "l switched the layout");
+        app.handle_key(key(KeyCode::Char('h')), 0);
+        assert_eq!(app.config.layout, first, "h stepped back");
+        // j/k move between rows and wrap at the ends.
+        for _ in 0..SETTINGS_ROWS.len() {
+            app.handle_key(key(KeyCode::Char('j')), 0);
+        }
+        assert_eq!(app.settings_row(), 0, "the cursor wrapped back to the top");
+        app.handle_key(key(KeyCode::Esc), 0);
+        assert_eq!(app.config.layout, first, "esc put the layout back");
+    }
+
+    #[test]
+    fn w_saves_from_the_settings_screen_and_esc_then_leaves_the_file_alone() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.handle_key(key(KeyCode::Char(',')), 0);
+        app.handle_key(key(KeyCode::Char('j')), 0);
+        app.handle_key(key(KeyCode::Char('j')), 0);
+        app.handle_key(key(KeyCode::Char('j')), 0);
+        app.handle_key(key(KeyCode::Char('j')), 0);
+        app.handle_key(key(KeyCode::Char('j')), 0);
+        app.handle_key(key(KeyCode::Char('j')), 0); // lesson words
+        app.handle_key(key(KeyCode::Char(' ')), 0);
+        assert_eq!(app.config.lesson_words, 30, "space stepped the value");
+        app.handle_key(key(KeyCode::Char('w')), 0);
+        let path = scratch.paths.config_file();
+        assert!(path.is_file(), "w wrote {}", path.display());
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("lesson_words = 30"), "{saved}");
+
+        // Editing after the save and leaving with esc must not touch the file.
+        app.handle_key(key(KeyCode::Char(' ')), 0);
+        assert_eq!(app.config.lesson_words, 40);
+        app.handle_key(key(KeyCode::Esc), 0);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved, "esc wrote nothing");
+        assert_eq!(Config::load(&path).unwrap().lesson_words, 30);
+    }
+
+    #[test]
     fn switching_layout_loads_the_profile_for_the_new_pair() {
         let scratch = Scratch::new();
         let config = Config {
@@ -1280,6 +1333,16 @@ mod tests {
         let fresh = Profile::new(&app.layout, "fr", 0);
         assert_eq!(app.profile.unlocked, fresh.unlocked, "bepo.fr's own alphabet");
         assert!(!app.profile.unlocked.contains(&'z'), "colemak's unlock stayed behind");
+        let colemak: BTreeSet<char> = [Profile::load(&scratch.paths.profile_file("colemak-dh", "fr"))
+            .unwrap()
+            .unlocked]
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_ne!(
+            app.profile.unlocked, colemak,
+            "the two pairs' unlocked sets are not the same"
+        );
         // The pair's own file exists now, and it is the one the app reads.
         let path = scratch.paths.profile_file("bepo", "fr");
         assert!(path.is_file(), "{} was created", path.display());

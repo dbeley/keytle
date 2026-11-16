@@ -174,7 +174,20 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         let text = screen(&terminal);
-        for expected in ["esc", "tab", "unlock next", "lock current", "stats", "help", "quit", "merge modes"] {
+        for expected in [
+            "esc",
+            "abort",
+            "tab",
+            "restart",
+            "unlock next",
+            "lock current",
+            "stats",
+            "help",
+            "quit",
+            "merge modes",
+            "chart mode",
+            "save settings",
+        ] {
             assert!(text.contains(expected), "{expected} is drawn:\n{text}");
         }
         let _ = std::fs::remove_dir_all(base);
@@ -191,6 +204,8 @@ mod tests {
         assert!(text.contains("colemak-dh"), "{text}");
         assert!(text.contains("target wpm"), "{text}");
         assert!(text.contains("80"), "{text}");
+        assert!(text.contains("config:"), "the footer names the file:\n{text}");
+        assert!(text.contains("config.toml"), "{text}");
         let _ = std::fs::remove_dir_all(base);
     }
 

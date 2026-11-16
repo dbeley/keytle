@@ -231,6 +231,22 @@ impl Profile {
         Some(event)
     }
 
+    /// Unlock `ch` because the user asked for it, not because the rule said so.
+    /// The event is recorded as [`UnlockHow::Manual`] so a profile can tell the
+    /// two apart later; the session budget is charged exactly as an automatic
+    /// unlock would charge it.
+    pub fn unlock_manually(&mut self, ch: char, now_ms: u64) -> UnlockEvent {
+        self.unlocked.insert(ch);
+        self.unlocks_this_session = self.unlocks_this_session.saturating_add(1);
+        let event = UnlockEvent {
+            ch,
+            ts_ms: now_ms,
+            how: UnlockHow::Manual,
+        };
+        self.last_unlock = Some(event);
+        event
+    }
+
     /// Fold one finished lesson's per-key totals into the profile.
     ///
     /// A session's mean interval is replayed once per hit, so a long session

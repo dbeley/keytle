@@ -392,6 +392,62 @@ impl Totals {
     }
 }
 
+/// The history as JSONL: one record per line, the same shape the file holds.
+pub fn export_jsonl(records: &[TestRecord]) -> Result<String, serde_json::Error> {
+    let mut out = String::new();
+    for rec in records {
+        out.push_str(&serde_json::to_string(rec)?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// The columns of the TSV export, in order. The header is this list, so a
+/// column cannot be added to one side only.
+const TSV_COLUMNS: [&str; 13] = [
+    "ts",
+    "layout",
+    "host",
+    "emulated",
+    "lang",
+    "mode",
+    "lesson",
+    "wpm",
+    "raw_wpm",
+    "accuracy",
+    "duration_ms",
+    "unlocked_before",
+    "unlocked_after",
+];
+
+/// The history as TSV: a header row, then one row per record. Per-key totals
+/// are left out — they are a nested map, and a spreadsheet column would have to
+/// lie about that; JSONL is the lossless export.
+pub fn export_tsv(records: &[TestRecord]) -> String {
+    let mut out = TSV_COLUMNS.join("\t");
+    out.push('\n');
+    for rec in records {
+        let row = [
+            rec.ts.clone(),
+            rec.layout.clone(),
+            rec.host.clone(),
+            rec.emulated.to_string(),
+            rec.lang.clone(),
+            rec.mode.to_string(),
+            rec.lesson.to_string(),
+            format!("{:.2}", rec.wpm),
+            format!("{:.2}", rec.raw_wpm),
+            format!("{:.4}", rec.accuracy),
+            rec.duration_ms.to_string(),
+            rec.unlocked_before.to_string(),
+            rec.unlocked_after.to_string(),
+        ];
+        out.push_str(&row.join("\t"));
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
