@@ -4,7 +4,11 @@
 //! pure function of its input events and every rule below can be tested without
 //! sleeping. The rules come straight from the design:
 //!
-//! * comparison is **exact** — `T` where `t` is expected is a [`Outcome::Miss`];
+//! * comparison is **exact** — `T` where `t` is expected is an [`Outcome::Miss`],
+//!   and in strict mode it does not advance the cursor either;
+//! * a wrong case is still an error for the session's accuracy, but it is *not*
+//!   charged to the letter: it lands in [`KeyAgg::shift_misses`], because the
+//!   letter was known and the modifier was not;
 //! * in strict mode a miss records an error and the cursor stays put, so the
 //!   right key must be typed before the lesson continues (keybr's feel); lenient
 //!   mode records the miss and moves on;
@@ -17,7 +21,9 @@
 //!   backwards contributes nothing at all.
 //!
 //! Per-key aggregates are keyed by the *lowercase expected* character, so `T` and
-//! `t` feed one bucket — the same normalisation the progression engine uses.
+//! `t` feed one bucket — the same normalisation the progression engine uses. Inside
+//! that bucket [`KeyAgg::hits`], [`KeyAgg::misses`] and [`KeyAgg::shift_misses`] are
+//! what the unlock rule reads.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -46,6 +52,10 @@ pub enum Outcome {
 pub struct KeyAgg {
     pub hits: u32,
     pub misses: u32,
+    /// Wrong case typed where this key's character was expected: `T` for `t`.
+    /// Kept apart from `misses` so the unlock rule can tell a letter that is not
+    /// known from a modifier that is not known.
+    pub shift_misses: u32,
     /// Rounded mean interval in ms between consecutive correct keystrokes.
     pub mean_dt: u32,
 }
@@ -55,6 +65,7 @@ pub struct KeyAgg {
 struct Agg {
     hits: u32,
     misses: u32,
+    shift_misses: u32,
     dt_sum: u64,
     dt_count: u32,
 }
@@ -144,7 +155,16 @@ impl TypingSession {
         self.misses += 1;
         self.keystrokes += 1;
         let key = expected.to_lowercase().next().unwrap_or(expected);
-        self.per_key.entry(key).or_default().misses += 1;
+        // `T` where `t` was expected differs from the expected character only by
+        // case: the letter is known, the shift is not. Charge it to the shift
+        // counter so the letter keeps its earned accuracy.
+        let case_only = typed.to_lowercase().next().unwrap_or(typed) == key;
+        let agg = self.per_key.entry(key).or_default();
+        if case_only {
+            agg.shift_misses += 1;
+        } else {
+            agg.misses += 1;
+        }
         self.last_miss = Some(typed);
         self.last_event_ms = self.last_event_ms.max(now_ms);
         if !self.strict {
@@ -195,6 +215,7 @@ impl TypingSession {
                         KeyAgg {
                             hits: agg.hits,
                             misses: agg.misses,
+                            shift_misses: agg.shift_misses,
                             mean_dt: agg.mean_dt(),
                         },
                     )
@@ -319,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn wrong_case_is_a_miss() {
+    fn wrong_case_is_a_miss_but_a_shift_miss_on_the_key() {
         let mut s = TypingSession::new("t", true, 0);
         assert_eq!(
             s.apply('T', 100),
@@ -328,12 +349,39 @@ mod tests {
                 typed: 'T'
             }
         );
-        assert!(!s.is_complete());
+        assert!(!s.is_complete(), "strict mode does not advance on a miss");
         assert_eq!(s.apply('t', 200), Outcome::Hit);
         // Both the failed capital and the working lower case feed one bucket.
+        let stats = s.stats();
+        let agg = stats.per_key[&'t'];
+        assert_eq!(agg.hits, 1);
+        assert_eq!(agg.shift_misses, 1);
+        assert_eq!(agg.misses, 0, "the letter was known, so it is not blamed");
+        // The session still counts the keystroke as an error.
+        assert!((stats.accuracy - 0.5).abs() < EPS);
+        assert!(stats.raw_wpm > stats.net_wpm, "the shift miss still costs raw speed");
+    }
+
+    #[test]
+    fn a_genuinely_wrong_letter_is_a_plain_miss_not_a_shift_miss() {
+        let mut s = TypingSession::new("t", true, 0);
+        assert!(matches!(s.apply('r', 100), Outcome::Miss { .. }));
         let agg = s.stats().per_key[&'t'];
         assert_eq!(agg.misses, 1);
-        assert_eq!(agg.hits, 1);
+        assert_eq!(agg.shift_misses, 0);
+    }
+
+    #[test]
+    fn shift_misses_are_counted_per_occurrence_not_per_cursor() {
+        // `T` is auto-repeat at one cursor, so it is charged once; the second
+        // capital is a fresh decision and is charged again.
+        let mut s = TypingSession::new("tt", true, 0);
+        assert!(matches!(s.apply('T', 100), Outcome::Miss { .. }));
+        assert_eq!(s.apply('T', 130), Outcome::Ignored, "auto-repeat");
+        assert_eq!(s.apply('t', 200), Outcome::Hit);
+        assert!(matches!(s.apply('T', 300), Outcome::Miss { .. }));
+        assert_eq!(s.stats().per_key[&'t'].shift_misses, 2);
+        assert_eq!(s.stats().per_key[&'t'].misses, 0);
     }
 
     #[test]
