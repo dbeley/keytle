@@ -121,6 +121,7 @@ impl Corpus {
     /// lines are skipped; a tab is rejected since it cannot be typed as written.
     pub fn parse_sentences(text: &str) -> Result<Corpus, CorpusError> {
         let mut sentences = Vec::new();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
         for (line, body) in lines(text).enumerate() {
             let body = body.trim();
             if body.is_empty() {
@@ -129,7 +130,7 @@ impl Corpus {
             if body.contains('\t') {
                 return Err(bad_line(line + 1, "sentences may not contain a tab"));
             }
-            if !sentences.iter().any(|seen| seen == body) {
+            if seen.insert(body) {
                 sentences.push(body.to_string());
             }
         }
@@ -374,6 +375,29 @@ mod tests {
             vec!["as ad."]
         );
         assert!(corpus.words_covered_by(&BTreeSet::new()).is_empty());
+    }
+
+    #[test]
+    fn accents_are_not_covered_by_an_ascii_only_layout() {
+        let mut corpus = Corpus::parse_words("Été 5\nà 4\nete 3\na 2\n").expect("words");
+        corpus.sentences = vec!["Été à Paris.".to_string(), "Ete a Paris.".to_string()];
+
+        let allowed = allow("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz. ");
+
+        // `É` and `à` are separate characters from `E`/`e` and `a`: an ASCII
+        // layout cannot type them, so the accented entries are excluded.
+        assert_eq!(
+            corpus
+                .words_covered_by(&allowed)
+                .iter()
+                .map(|word| word.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ete", "a"]
+        );
+        assert_eq!(
+            corpus.sentences_covered_by(&allowed),
+            vec!["Ete a Paris."]
+        );
     }
 
     #[test]

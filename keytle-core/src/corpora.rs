@@ -6,8 +6,8 @@
 //! top, which is how a learner adds their own vocabulary without touching the
 //! shipped data. A missing user file is normal, not an error.
 //!
-//! Provenance and licences of the bundled data are in `NOTICE.md` beside
-//! `src/data/corpora`.
+//! Provenance and licences of the bundled data are in `data/corpora/NOTICE.md`,
+//! inside this crate so the attributions ship with the published package.
 
 use std::fs;
 use std::io;
