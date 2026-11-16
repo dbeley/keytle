@@ -9,7 +9,8 @@
 //!
 //! * the mean [`confidence`](KeyStat::confidence) of the **reachable** unlocked
 //!   keys must reach 0.6, and
-//! * no reachable unlocked key may sit below 0.9 accuracy,
+//! * no reachable unlocked key may sit below 0.9 accuracy over its *recent*
+//!   keystrokes (an EMA over roughly the last twenty, not the whole history),
 //!
 //! with no ceiling on how many letters one session may unlock: a typist who
 //! already knows the layout should be able to climb to their real level in an
@@ -335,6 +336,7 @@ mod tests {
                         misses: 0,
                         shift_misses: 0,
                         mean_interval_ms: 150.0,
+                        accuracy_ema: None,
                     },
                 )
             })
@@ -411,6 +413,7 @@ mod tests {
                 misses: 2,
                 shift_misses: 0,
                 mean_interval_ms: 150.0,
+                accuracy_ema: None,
             },
         );
         match profile.verdict(&colemak(), "en", &chars("tea"), TARGET) {
@@ -420,6 +423,38 @@ mod tests {
             }
             other => panic!("expected an accuracy block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn old_typos_stop_blocking_once_the_letters_are_clean() {
+        // The user-visible complaint: with a lifetime accuracy, a letter that
+        // started badly could never get back above the floor, however well it
+        // is typed now. The window lets the clean run win.
+        let mut profile = Profile::new(&colemak(), "en", 0);
+        for ch in "etao".chars() {
+            let mut stat = KeyStat::default();
+            for _ in 0..20 {
+                stat.record(true, Some(150.0));
+            }
+            for _ in 0..10 {
+                stat.record(false, None);
+            }
+            for _ in 0..60 {
+                stat.record(true, Some(150.0));
+            }
+            profile.keys.insert(ch, stat);
+        }
+        for (ch, stat) in &profile.keys {
+            assert!(
+                stat.lifetime_accuracy() < UNLOCK_ACCURACY,
+                "{ch}: the whole history is still under the floor"
+            );
+            assert!(stat.accuracy() > 0.97, "{ch}: but the recent run is clean");
+        }
+        assert_eq!(
+            profile.verdict(&colemak(), "en", &chars("etao"), TARGET),
+            Verdict::Unlock('i')
+        );
     }
 
     #[test]

@@ -319,6 +319,9 @@ pub fn key_rows(
                 misses: total.misses,
                 shift_misses: total.shift_misses,
                 mean_interval_ms: mean_dt,
+                // The dashboard's own window is the last KEY_WINDOW tests, so the
+                // ratio over those totals is already "recent"; no EMA needed.
+                accuracy_ema: None,
             };
             KeyRow {
                 ch,

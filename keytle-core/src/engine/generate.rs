@@ -555,6 +555,7 @@ mod tests {
                         misses: 0,
                         shift_misses: 0,
                         mean_interval_ms: 150.0,
+                        accuracy_ema: None,
                     },
                 )
             })
@@ -943,6 +944,7 @@ mod tests {
                 misses: 6,
                 shift_misses: 0,
                 mean_interval_ms: 600.0,
+                accuracy_ema: None,
             },
         );
         let lesson = generate(

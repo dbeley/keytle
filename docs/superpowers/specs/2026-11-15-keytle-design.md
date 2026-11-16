@@ -271,12 +271,17 @@ Confidence per key:
 
 ```
 speed_c   = clamp(target_interval / interval_ms, 0, 1)      # target ≈ 150 ms ≈ 80 wpm
-acc_c     = clamp((hits / (hits + misses) - 0.90) / 0.08, 0, 1)
+acc_c     = clamp((recent_accuracy - 0.90) / 0.08, 0, 1)
 confidence = 0.6 * speed_c + 0.4 * acc_c
 ```
 
+`recent_accuracy` is an EMA over about the last twenty keystrokes for that key
+(`alpha = 0.05`), seeded from the lifetime ratio when a profile predates the field. A
+lifetime ratio would leave a letter with a thousand hits and four early typos below the
+floor for ever, however cleanly it is typed now.
+
 Unlock rule, evaluated at the end of a completed lesson: if the mean confidence of the
-*reachable* unlocked set ≥ 0.6 **and** no reachable unlocked key has accuracy < 0.90,
+*reachable* unlocked set ≥ 0.6 **and** no reachable unlocked key has recent accuracy < 0.90,
 unlock the next letter from the layout's unlock order, then the punctuation the current
 language needs (`'`, `,`, `.`, `;`, `:`, `!`, `?`, and for French `é à è ç ù ê î ô û`, in
 that order, skipping any the host cannot reach). One letter per qualifying lesson, with

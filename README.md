@@ -77,6 +77,9 @@ is used by the next lesson.
   reaches **0.6** and no key sits below **0.90** accuracy. One more letter then
   unlocks, and there is **no session cap**: a typist who already knows the layout
   can climb to their real level in one sitting instead of three letters at a time.
+* Accuracy is a **moving average of the last ~20 keystrokes** on that key, not a
+  lifetime ratio. A letter that started with a few typos can therefore clear the
+  floor with a clean run, instead of carrying its early mistakes for ever.
 * The order walks the whole board: the language's most frequent letters first,
   then the home row and the remaining rows key by key, then punctuation and (for
   `fr`) the accented letters. Every unlock is automatic: there is no key that

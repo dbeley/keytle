@@ -102,7 +102,7 @@ pub fn unlock_line(outcome: &UnlockOutcome) -> String {
             keytle_core::engine::profile::UNLOCK_CONFIDENCE
         ),
         Verdict::Blocked(BlockReason::Accuracy(key, accuracy)) => format!(
-            "{ch} - {key} is at {:.0}% accuracy, {:.0}% is the floor",
+            "{ch} - {key} is at {:.0}% accuracy lately, {:.0}% is the floor",
             accuracy * 100.0,
             keytle_core::engine::profile::UNLOCK_ACCURACY * 100.0
         ),

@@ -18,14 +18,21 @@
 //!
 //! A key with no data must not look perfect, so an untouched stat reports
 //! `accuracy() == 1.0` (nothing has gone wrong yet) but `confidence() == 0.0`
-//! (nothing has gone right either). Intervals are smoothed with an EMA rather
-//! than a plain mean so a single hitch - or a single brilliant burst - cannot
-//! swing a key's standing.
+//! (nothing has gone right either). Both interval and accuracy are smoothed with
+//! an EMA rather than a plain mean, so a single hitch cannot swing a key's
+//! standing *and* an old one can be outgrown: `accuracy()` is the last
+//! [`ACC_WINDOW`]-odd keystrokes, not the whole history. A lifetime ratio would
+//! make a letter with a thousand hits and four early typos sit under the floor
+//! for ever, however cleanly it is typed now.
 
 use serde::{Deserialize, Serialize};
 
 /// EMA weight for a new interval sample.
 const ALPHA: f32 = 0.1;
+/// Roughly how many keystrokes `accuracy()` remembers: `1 / ACC_ALPHA`.
+const ACC_WINDOW: u32 = 20;
+/// EMA weight for a new correctness sample.
+const ACC_ALPHA: f32 = 1.0 / ACC_WINDOW as f32;
 /// Accuracy that earns no credit and the width of the band up to full credit.
 const ACC_FLOOR: f32 = 0.90;
 const ACC_SPAN: f32 = 0.08;
@@ -46,11 +53,28 @@ pub struct KeyStat {
     pub shift_misses: u32,
     /// EMA of the interval between consecutive correct keystrokes, in ms.
     pub mean_interval_ms: f32,
+    /// EMA of right/wrong over the recent keystrokes, `None` until the first
+    /// one after the field existed: a profile written before it seeds from the
+    /// lifetime ratio, which is the only evidence there is.
+    #[serde(default)]
+    pub accuracy_ema: Option<f32>,
 }
 
 impl KeyStat {
-    /// `hits / (hits + misses)`, or `1.0` when the key has never been seen.
+    /// How accurate this key is *lately*, in `0.0..=1.0`: an EMA over roughly
+    /// the last [`ACC_WINDOW`] keystrokes, so a clean run can outgrow old
+    /// mistakes. `1.0` when the key has never been seen.
     pub fn accuracy(&self) -> f32 {
+        if self.hits + self.misses == 0 {
+            return 1.0;
+        }
+        self.accuracy_ema
+            .unwrap_or_else(|| self.lifetime_accuracy())
+    }
+
+    /// `hits / (hits + misses)`: the whole history, kept for display and as the
+    /// seed a profile written by an older build starts from.
+    pub fn lifetime_accuracy(&self) -> f32 {
         let total = self.hits + self.misses;
         if total == 0 {
             1.0
@@ -86,6 +110,14 @@ impl KeyStat {
         } else {
             self.misses += 1;
         }
+        // Seed from the lifetime ratio when this is the first update after a
+        // load: on a brand-new key the ratio *is* this sample, so the average
+        // starts exact rather than at an invented 1.0.
+        let previous = self
+            .accuracy_ema
+            .unwrap_or_else(|| self.lifetime_accuracy());
+        let sample = if hit { 1.0 } else { 0.0 };
+        self.accuracy_ema = Some((1.0 - ACC_ALPHA) * previous + ACC_ALPHA * sample);
         if let Some(dt) = interval_ms {
             self.mean_interval_ms = if self.mean_interval_ms > 0.0 {
                 (1.0 - ALPHA) * self.mean_interval_ms + ALPHA * dt
@@ -119,6 +151,7 @@ mod tests {
             misses,
             shift_misses: 0,
             mean_interval_ms,
+            accuracy_ema: None,
         }
     }
 
@@ -194,7 +227,49 @@ mod tests {
         s.record(false, None);
         assert_eq!(s.hits, 1);
         assert_eq!(s.misses, 2);
-        assert!(close(s.accuracy(), 1.0 / 3.0));
+        assert!(close(s.lifetime_accuracy(), 1.0 / 3.0));
+        // accuracy() is the recent window: 1.0, then 0.95, then 0.9025.
+        assert!(close(s.accuracy(), 0.95 * 0.95));
+    }
+
+    #[test]
+    fn accuracy_is_the_recent_window_not_the_lifetime_ratio() {
+        let mut s = KeyStat::default();
+        for _ in 0..20 {
+            s.record(true, None);
+        }
+        for _ in 0..10 {
+            s.record(false, None);
+        }
+        assert!(s.lifetime_accuracy() < 0.7, "the history really is poor");
+        assert!(s.accuracy() < 0.7, "and recent typing still reflects it");
+        // Sixty clean keystrokes later the window has forgotten the bad run,
+        // long before the lifetime ratio could climb.
+        for _ in 0..60 {
+            s.record(true, None);
+        }
+        assert!(
+            s.lifetime_accuracy() < 0.90,
+            "the lifetime ratio is still under the floor: {}",
+            s.lifetime_accuracy()
+        );
+        assert!(
+            s.accuracy() > 0.97,
+            "but the recent window is clean: {}",
+            s.accuracy()
+        );
+    }
+
+    #[test]
+    fn a_stat_without_the_recent_accuracy_seeds_from_the_ratio() {
+        // The shape an older keytle wrote, before `accuracy_ema`.
+        let json = r#"{"hits":9,"misses":1,"shift_misses":0,"mean_interval_ms":150.0}"#;
+        let mut stat: KeyStat = serde_json::from_str(json).expect("the old shape parses");
+        assert!(stat.accuracy_ema.is_none());
+        assert!(close(stat.accuracy(), 0.9), "seeded from hits/misses");
+        stat.record(true, None);
+        assert!(stat.accuracy_ema.is_some(), "the first stroke starts it");
+        assert!(stat.accuracy() > 0.9, "and it moves with the evidence");
     }
 
     #[test]
