@@ -102,7 +102,7 @@ pub fn generate(
     }
     match mode {
         Mode::Pseudo => pseudo_lesson(corpus, lang, keys, &alphabet, words, None, rng),
-        Mode::Words => words_lesson(corpus, &alphabet, words, rng).unwrap_or_else(|| {
+        Mode::Words => words_lesson(corpus, keys, &alphabet, words, rng).unwrap_or_else(|| {
             pseudo_lesson(
                 corpus,
                 lang,
@@ -156,27 +156,32 @@ fn pseudo_lesson(
 }
 
 /// Real corpus words, or `None` when too few of them fit the alphabet.
+///
+/// A word's chance of being drawn is its score: `sqrt(freq)` times the mean
+/// weakness of its letters (see [`word_score`]), so common words dominate the
+/// lesson and a word carrying a shaky key is drilled while the letters catch up.
 fn words_lesson(
     corpus: &Corpus,
+    keys: &BTreeMap<char, KeyStat>,
     alphabet: &[char],
     count: usize,
     rng: &mut impl Rng,
 ) -> Option<Lesson> {
     let allowed: BTreeSet<char> = alphabet.iter().copied().collect();
-    let candidates: Vec<&str> = corpus
+    let scored: Vec<(&str, f32)> = corpus
         .words_covered_by(&allowed)
         .into_iter()
-        .map(|word| word.text.as_str())
+        .map(|word| (word.text.as_str(), word_score(&word.text, word.freq, keys)))
         .collect();
-    if candidates.len() < MIN_WORDS_CANDIDATES {
+    if scored.len() < MIN_WORDS_CANDIDATES {
         return None;
     }
     let mut chosen: Vec<&str> = Vec::with_capacity(count);
     for _ in 0..count {
-        let mut word = candidates[index(rng, candidates.len())];
+        let mut word = pick_word(rng, &scored);
         // One retry is enough to avoid "the the" without biasing the draw.
-        if chosen.last() == Some(&word) && candidates.len() > 1 {
-            word = candidates[index(rng, candidates.len())];
+        if chosen.last() == Some(&word) && scored.len() > 1 {
+            word = pick_word(rng, &scored);
         }
         chosen.push(word);
     }
@@ -185,6 +190,35 @@ fn words_lesson(
         words: chosen.len(),
         note: None,
     })
+}
+
+/// A real word's draw weight: `sqrt(freq)` (so a ten-times commoner word is only
+/// about three times likelier, and rare words still appear) times the mean
+/// weakness of its letters (so a word made of shaky keys is drilled).
+fn word_score(text: &str, freq: u64, keys: &BTreeMap<char, KeyStat>) -> f32 {
+    let len = text.chars().count();
+    let weakness = if len == 0 {
+        WEIGHT_FLOOR
+    } else {
+        text.chars().map(|ch| letter_weight(ch, keys)).sum::<f32>() / len as f32
+    };
+    (freq as f32).sqrt().max(1.0) * weakness
+}
+
+/// Draw one word from a scored pool.
+fn pick_word<'a>(rng: &mut impl Rng, pool: &[(&'a str, f32)]) -> &'a str {
+    let total: f32 = pool.iter().map(|(_, score)| score).sum();
+    if total <= 0.0 {
+        return pool[index(rng, pool.len())].0;
+    }
+    let mut point = unit(rng) * total;
+    for (word, score) in pool {
+        if point < *score {
+            return word;
+        }
+        point -= *score;
+    }
+    pool[pool.len() - 1].0
 }
 
 /// Three real sentences, or `None` when the corpus cannot supply them at all.
@@ -486,7 +520,7 @@ fn all_letters(layout: &Layout) -> Vec<char> {
 mod tests {
     use super::*;
     use crate::config::Mode;
-    use crate::corpus::Corpus;
+    use crate::corpus::{Corpus, Word};
     use crate::layout::Layout;
     use rand::rngs::SmallRng;
     use rand::SeedableRng;
@@ -687,6 +721,68 @@ mod tests {
         assert_eq!(lesson.note, Some(Note::FallbackToPseudo));
         assert_eq!(lesson.words, 20);
         assert_inside(&lesson.text, &allowed);
+    }
+
+    /// A corpus of `targets` plus filler words, so `words` mode is not skipped for
+    /// want of candidates. The filler is rare, so the targets dominate.
+    fn scored_corpus(targets: &[(&str, u64)]) -> Corpus {
+        let mut corpus = Corpus::default();
+        for i in 0..MIN_WORDS_CANDIDATES {
+            let text = format!("xy{}", "z".repeat(i % 4 + 1));
+            corpus.words.push(Word::new(text, 1));
+        }
+        for (text, freq) in targets {
+            corpus.words.push(Word::new(*text, *freq));
+        }
+        corpus
+    }
+
+    fn occurrences(lesson: &Lesson, word: &str) -> usize {
+        words_of(lesson)
+            .iter()
+            .filter(|drawn| drawn.as_str() == word)
+            .count()
+    }
+
+    #[test]
+    fn a_word_with_a_shaky_key_is_drilled_more_often() {
+        // `bat` and `cat` are equally frequent; `c` has never been practised, so
+        // the weakness factor should make `cat` the likelier word.
+        let allowed: BTreeSet<char> = ('a'..='z').collect();
+        let keys = stats("bta");
+        let lesson = generate(
+            &colemak(),
+            &scored_corpus(&[("bat", 1_000), ("cat", 1_000)]),
+            "en",
+            &keys,
+            &allowed,
+            &allowed,
+            Mode::Words,
+            400,
+            &mut rng(37),
+        );
+        assert_eq!(lesson.note, None);
+        let (bat, cat) = (occurrences(&lesson, "bat"), occurrences(&lesson, "cat"));
+        assert!(cat > bat, "shaky `cat` {cat} vs strong `bat` {bat}");
+    }
+
+    #[test]
+    fn a_much_commoner_word_still_wins_when_confidences_match() {
+        let allowed: BTreeSet<char> = ('a'..='z').collect();
+        let keys = stats("abcdefghijklmnopqrstuvwxyz");
+        let lesson = generate(
+            &colemak(),
+            &scored_corpus(&[("bat", 10_000), ("cat", 100)]),
+            "en",
+            &keys,
+            &allowed,
+            &allowed,
+            Mode::Words,
+            400,
+            &mut rng(41),
+        );
+        let (bat, cat) = (occurrences(&lesson, "bat"), occurrences(&lesson, "cat"));
+        assert!(bat > cat, "frequent `bat` {bat} vs rare `cat` {cat}");
     }
 
     #[test]

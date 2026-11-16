@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,10 @@ const SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
 const UNLOCK_CONFIDENCE: f32 = 0.7;
 /// Hard accuracy floor: below this, nothing unlocks.
 const UNLOCK_ACCURACY: f32 = 0.93;
+/// The rung after the letters: punctuation prose needs, whatever the language.
+const PUNCTUATION: &[char] = &['\'', ',', '.', ';', ':', '!', '?'];
+/// The rung after the punctuation for French: its accented letters.
+const FRENCH_EXTRAS: &[char] = &['é', 'à', 'è', 'ç', 'ù', 'ê', 'î', 'ô', 'û'];
 
 /// How an unlock came about. `Auto` is the rule below; `Manual` and `Lock` exist
 /// for the UI's "unlock this anyway" and "pin this set" escape hatches.
@@ -127,13 +131,33 @@ impl Profile {
     }
 
     /// Write the profile as JSON, creating the parent directory if needed.
+    ///
+    /// The write is atomic: the JSON goes to `<path>.tmp` in the same directory,
+    /// is flushed to disk, and only then renamed over the target. A crash
+    /// mid-write therefore leaves the old profile intact — a truncated durable
+    /// profile would lose every unlocked key.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             fs::create_dir_all(dir)?;
         }
         let text = serde_json::to_string_pretty(self)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        fs::write(path, text)
+        let mut tmp_name = path.as_os_str().to_owned();
+        tmp_name.push(".tmp");
+        let tmp = PathBuf::from(tmp_name);
+        // An existing tmp file from an interrupted save is simply overwritten.
+        let write = || -> io::Result<()> {
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        };
+        if let Err(err) = write() {
+            let _ = fs::remove_file(&tmp);
+            return Err(err);
+        }
+        fs::rename(&tmp, path).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
     }
 
     /// Mean confidence of the unlocked keys that `reachable` allows, or `None`
@@ -164,7 +188,7 @@ impl Profile {
         reachable: &BTreeSet<char>,
         target_interval_ms: f32,
     ) -> Verdict {
-        let Some(next) = self.next_key(layout, lang) else {
+        let Some(next) = self.next_key(layout, lang, reachable) else {
             return Verdict::Blocked(BlockReason::NoNextKey);
         };
         if self.unlocks_this_session >= MAX_UNLOCKS_PER_SESSION {
@@ -240,12 +264,29 @@ impl Profile {
         }
     }
 
-    /// The first letter of the teaching order this profile has not unlocked.
-    fn next_key(&self, layout: &Layout, lang: &str) -> Option<char> {
-        layout
+    /// The next key of the teaching order this profile has not unlocked, or the
+    /// next rung once the letters are done.
+    ///
+    /// The letters come from the layout's `unlock_order`. When every one of them
+    /// is unlocked the rung after them is the punctuation prose needs, then the
+    /// accented letters French needs; a character the layout has no key for, or
+    /// the host keyboard cannot press, is skipped rather than blocking the rung.
+    fn next_key(&self, layout: &Layout, lang: &str, reachable: &BTreeSet<char>) -> Option<char> {
+        if let Some(ch) = layout
             .unlock_order_for(lang)
             .into_iter()
             .find(|ch| !self.unlocked.contains(ch))
+        {
+            return Some(ch);
+        }
+        let extras: &[char] = if lang == "fr" { FRENCH_EXTRAS } else { &[] };
+        PUNCTUATION
+            .iter()
+            .chain(extras.iter())
+            .copied()
+            .find(|ch| {
+                !self.unlocked.contains(ch) && reachable.contains(ch) && layout.contains_char(*ch)
+            })
     }
 }
 
@@ -510,5 +551,106 @@ mod tests {
     fn loading_a_missing_file_is_an_error_for_the_caller_to_judge() {
         let path = std::env::temp_dir().join("keytle-no-such-profile-xyz.json");
         assert!(Profile::load(&path).is_err());
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "keytle-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn tmp_path(path: &Path) -> PathBuf {
+        let mut name = path.as_os_str().to_owned();
+        name.push(".tmp");
+        PathBuf::from(name)
+    }
+
+    #[test]
+    fn the_punctuation_rung_follows_the_letters() {
+        let layout = colemak();
+        let mut set: Vec<char> = layout.unlock_order_for("en");
+        assert_eq!(set.len(), 8, "the bundled order is letters only");
+        let mut profile = profile_with(&set.iter().collect::<String>());
+        profile.unlocked = set.iter().copied().collect();
+        let reachable: BTreeSet<char> = set.iter().copied().chain(PUNCTUATION.iter().copied()).collect();
+
+        assert_eq!(
+            profile.verdict(&layout, "en", &reachable, TARGET),
+            Verdict::Unlock('\'')
+        );
+        assert_eq!(
+            profile.apply(Verdict::Unlock('\''), 5).expect("unlock").ch,
+            '\''
+        );
+        profile.keys.extend(strong("'"));
+        set.push('\'');
+        assert_eq!(
+            profile.verdict(&layout, "en", &reachable, TARGET),
+            Verdict::Unlock(',')
+        );
+    }
+
+    #[test]
+    fn the_french_rung_unlocks_the_extras_in_order() {
+        let layout = colemak();
+        let extras: Vec<char> = FRENCH_EXTRAS
+            .iter()
+            .copied()
+            .filter(|ch| layout.contains_char(*ch))
+            .collect();
+        assert_eq!(extras, vec!['é', 'ç'], "the bundled layout has two of them");
+        let mut set: Vec<char> = layout.unlock_order_for("fr");
+        set.extend(PUNCTUATION.iter().copied());
+        let mut profile = profile_with(&set.iter().collect::<String>());
+        profile.unlocked = set.iter().copied().collect();
+        let reachable: BTreeSet<char> = set.iter().copied().chain(extras.iter().copied()).collect();
+
+        for (i, expected) in extras.iter().copied().enumerate() {
+            assert_eq!(
+                profile.verdict(&layout, "fr", &reachable, TARGET),
+                Verdict::Unlock(expected),
+                "extra {i}"
+            );
+            profile.apply(Verdict::Unlock(expected), i as u64);
+            profile.keys.extend(strong(&expected.to_string()));
+        }
+        assert_eq!(
+            profile.verdict(&layout, "fr", &reachable, TARGET),
+            Verdict::Blocked(BlockReason::NoNextKey),
+            "the layout cannot type the rest, so the rung ends"
+        );
+    }
+
+    #[test]
+    fn save_is_atomic_and_leaves_no_tmp_behind() {
+        let dir = scratch_dir("profile-atomic");
+        let path = dir.join("colemak-dh.en.json");
+        let mut profile = profile_with("tnseriao");
+        profile.unlocked = chars("tnseriao");
+        profile.save(&path).expect("first save");
+        let good = Profile::load(&path).expect("load");
+
+        // A truncated tmp file left by an interrupted save must not be trusted or
+        // appended to: the next save replaces it and the target stays valid.
+        std::fs::write(tmp_path(&path), "{\"truncated\":").expect("plant a tmp");
+        profile.lesson_index = 42;
+        profile.save(&path).expect("second save");
+
+        let back = Profile::load(&path).expect("the profile is still valid JSON");
+        assert_eq!(back.lesson_index, 42);
+        assert_eq!(back.unlocked, good.unlocked);
+        assert!(
+            !tmp_path(&path).exists(),
+            "a .tmp file was left behind by {}",
+            path.display()
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
