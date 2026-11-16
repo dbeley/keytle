@@ -1,6 +1,6 @@
 # keytle
 
-Teach yourself a keyboard layout from the terminal — offline, no account, no
+Teach yourself a keyboard layout from the terminal - offline, no account, no
 browser. One binary drills you key by key, keybr-style: you start from four
 home-row letters, and a new letter unlocks only once the ones you own are fast
 and accurate. Run `keytle` in any terminal; it needs no network.
@@ -13,11 +13,11 @@ up on the host board to recover the pressed position and reads the target layout
 there: `e` on QWERTY counts as `f` under Colemak-DH, both sitting at `(1, 2)`.
 No system remap, no reboot.
 
-Characters the host cannot produce at the same *level* are unreachable — Colemak-
-DH's AltGr `é` has no QWERTY keystroke — so lessons and the unlock rule skip them
+Characters the host cannot produce at the same *level* are unreachable - Colemak-
+DH's AltGr `é` has no QWERTY keystroke - so lessons and the unlock rule skip them
 rather than block progress forever. `keytle doctor` names them: for
 `host_layout = "qwerty"` and `layout = "colemak-dh"` it reports `43 unreachable
-characters (… é ç …) — no host keystroke produces them at their level, so lessons
+characters (… é ç …) - no host keystroke produces them at their level, so lessons
 skip them`.
 
 ## Layouts and corpora are data files
@@ -44,8 +44,16 @@ altgr = "á"
 # ...one [[key]] per position...
 
 [unlock_order]
-default = ["t", "n", "s", "e", "r", "i", "a", "o"]
+en = ["e", "t", "a", "o", "i", "n", "s", "h", ...]   # frequency first, then by row
+fr = ["e", "s", "a", "i", "t", "n", "r", "u", ...]
+default = ["t", "n", "s", "e", "r", "i", "a", "o", ...]
 ```
+
+A list is the whole teaching order, not an extra rung: it is walked from the
+first character to the last. The bundled lists start with the eight most common
+letters of the language the layout can type, then fall back on the layout's own
+home-row order and the remaining rows, so words form from the first lesson and
+posture still comes before the rare keys.
 
 A `finger = "left-index"` line is still accepted in a layout file, but nothing
 draws it: the board shows keys, not hands.
@@ -60,18 +68,19 @@ is used by the next lesson.
 
 ## How learning works
 
-* A new profile starts with the first **four** letters of the teach order (`t n s
-  e` for Colemak-DH); lessons use only unlocked letters.
+* A new profile starts with the first **four** letters of the teach order (`e t a
+  o` in English, whatever the layout); lessons use only unlocked letters.
 * Each key keeps a **confidence** in `0.0..=1.0` mixing speed and accuracy:
   `0.6 * speed + 0.4 * accuracy`. Speed against your `target_wpm` carries more
   weight because progression is about fluency; accuracy has a separate floor.
 * A lesson qualifies when the mean confidence of your unlocked, reachable keys
-  reaches **0.7** and no key sits below **0.93** accuracy. One more letter then
-  unlocks — at most **three per session**, and a session restarts after thirty
-  idle minutes, so a lucky streak cannot run away with the alphabet.
-* After the letters come punctuation, then French accents for `fr`. Every unlock
-  is automatic: there is no key that skips ahead, so the profile can never hold
-  a letter the lessons did not earn.
+  reaches **0.6** and no key sits below **0.90** accuracy. One more letter then
+  unlocks, and there is **no session cap**: a typist who already knows the layout
+  can climb to their real level in one sitting instead of three letters at a time.
+* The order walks the whole board: the language's most frequent letters first,
+  then the home row and the remaining rows key by key, then punctuation and (for
+  `fr`) the accented letters. Every unlock is automatic: there is no key that
+  skips ahead, so the profile can never hold a letter the lessons did not earn.
 * Lessons are **real dictionary words** (`words` mode) unless the settings say
   otherwise: the bundled lists are filtered against a real lexicon, so what you
   type is English or French rather than generated text. `pseudo` still exists
@@ -80,7 +89,7 @@ is used by the next lesson.
 * The home screen is the drill's front page: it shows the test count, latest
   and best speed, consistency and the weakest keys, and every key that leads
   somewhere (`s` stats, `,` settings, `?` help). A finished test starts the next
-  one by itself after three seconds — or as soon as you type — and `esc` on the
+  one by itself after three seconds - or as soon as you type - and `esc` on the
   results holds it while you read.
 
 ## Install
@@ -101,7 +110,7 @@ services.keytle = {
 };
 ```
 
-`settings` is rendered to `config.toml` — `/etc/keytle/config.toml` on NixOS
+`settings` is rendered to `config.toml` - `/etc/keytle/config.toml` on NixOS
 (with `KEYTLE_CONFIG_DIR` pointing there), `$XDG_CONFIG_HOME/keytle/config.toml`
 under home-manager. Every key is optional; unknown keys are rejected, so a typo
 fails loudly rather than being silently ignored.
@@ -136,7 +145,7 @@ work on them.
                                     auto_next
 ~/.config/keytle/layouts/*.toml     your layouts
 ~/.local/share/keytle/tests.jsonl   one record per finished test
-~/.local/share/keytle/profiles/     <layout>.<lang>.json — unlocked keys, evidence
+~/.local/share/keytle/profiles/     <layout>.<lang>.json - unlocked keys, evidence
 ```
 
 Defaults: Colemak-DH emulated on QWERTY, English, `words`, 20 words, 80 wpm,
@@ -146,6 +155,6 @@ variables, then `~/.config` / `~/.local/share`.
 
 ## License
 
-MIT OR Apache-2.0, at your option. Bundled corpora keep their own licences —
+MIT OR Apache-2.0, at your option. Bundled corpora keep their own licences -
 FrequencyWords (CC-BY-SA 4.0, derived from OpenSubtitles) and Tatoeba (CC-BY 2.0
-FR) — with provenance in `keytle-core/src/data/corpora/NOTICE.md`.
+FR) - with provenance in `keytle-core/src/data/corpora/NOTICE.md`.

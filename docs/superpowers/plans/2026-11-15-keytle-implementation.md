@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A fast, offline Rust TUI that teaches keyboard layouts the way keybr does — per-key confidence, unlocked letters, generated practice text — with every test plotted by test number.
+**Goal:** A fast, offline Rust TUI that teaches keyboard layouts the way keybr does - per-key confidence, unlocked letters, generated practice text - with every test plotted by test number.
 
 **Architecture:** Cargo workspace. `keytle-core` holds layouts, corpora, the typing state machine, the progression engine and the JSONL stats store, all pure and terminal-free. `keytle` is a `ratatui`/`crossterm` binary that renders core state and feeds keystrokes back into it. Layouts and corpora are compiled in (`include_str!`) and overridden by user files at runtime.
 
@@ -28,11 +28,11 @@
 
 Inputs the spec implies but no feature test exercises. Each has its test in the owning task.
 
-1. **Bracketed paste of a whole paragraph** — a 200-character paste must not register as 200 instant keystrokes inflating WPM; expect it ignored (Task 8).
-2. **Terminal resized below 80×24 mid-lesson** — expect a compact render or a "too small" notice, never a panic or a garbled layout (Task 13).
-3. **`tests.jsonl` with a truncated final line** (crash mid-append) — expect startup to skip that one line with a warning and keep every other record (Task 12).
-4. **Corpus files with CRLF endings, a UTF-8 BOM, or accented French words** — expect them parsed as written, not silently dropped or mojibake (Task 6).
-5. **Malformed user layout** (a `base` holding two characters, duplicate positions, an `unlock_order` character absent from the layout) — expect a named error with the offending value, never a panic (Task 3).
+1. **Bracketed paste of a whole paragraph** - a 200-character paste must not register as 200 instant keystrokes inflating WPM; expect it ignored (Task 8).
+2. **Terminal resized below 80×24 mid-lesson** - expect a compact render or a "too small" notice, never a panic or a garbled layout (Task 13).
+3. **`tests.jsonl` with a truncated final line** (crash mid-append) - expect startup to skip that one line with a warning and keep every other record (Task 12).
+4. **Corpus files with CRLF endings, a UTF-8 BOM, or accented French words** - expect them parsed as written, not silently dropped or mojibake (Task 6).
+5. **Malformed user layout** (a `base` holding two characters, duplicate positions, an `unlock_order` character absent from the layout) - expect a named error with the offending value, never a panic (Task 3).
 
 ---
 
@@ -45,7 +45,7 @@ Inputs the spec implies but no feature test exercises. Each has its test in the 
 - Consumes: nothing.
 - Produces: `keytle_core::paths::{Paths, paths}` where `Paths { config_dir: PathBuf, data_dir: PathBuf }` and `paths() -> Paths` resolves env override → XDG → `$HOME` fallback. `Paths::config_file() -> PathBuf` (`config_dir/config.toml`), `Paths::tests_file()`, `Paths::profile_file(layout: &str, lang: &str)`.
 
-- [ ] **Step 1: Write the failing test** — `keytle-core/src/paths.rs`
+- [ ] **Step 1: Write the failing test** - `keytle-core/src/paths.rs`
 
 ```rust
 #[cfg(test)]
@@ -60,12 +60,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — `cargo test -p keytle-core paths` → FAIL (no `paths`).
+- [ ] **Step 2: Run it and watch it fail** - `cargo test -p keytle-core paths` → FAIL (no `paths`).
 
 - [ ] **Step 3: Implement `paths()`** with `std::env::var_os` for `KEYTLE_CONFIG_DIR`/`KEYTLE_DATA_DIR`.
-- [ ] **Step 4: Add the CLI** — `clap` derive with `#[command(name = "keytle", version)]` and a `doctor` subcommand printing resolved paths, binary version, and `$TERM`. `cargo run -p keytle -- doctor` must exit 0.
-- [ ] **Step 5: Verify** — `cargo test && cargo run -p keytle -- doctor`.
-- [ ] **Step 6: Commit** — `git commit -m "feat: workspace skeleton with paths and doctor"`.
+- [ ] **Step 4: Add the CLI** - `clap` derive with `#[command(name = "keytle", version)]` and a `doctor` subcommand printing resolved paths, binary version, and `$TERM`. `cargo run -p keytle -- doctor` must exit 0.
+- [ ] **Step 5: Verify** - `cargo test && cargo run -p keytle -- doctor`.
+- [ ] **Step 6: Commit** - `git commit -m "feat: workspace skeleton with paths and doctor"`.
 
 ### Task 2: Config
 
@@ -75,11 +75,11 @@ mod tests {
 - Consumes: `PathProvider`/`paths()` from Task 1.
 - Produces: `Config { layout: String, host_layout: String, language: String, mode: Mode, emulate: bool, strict: bool, lesson_words: usize, target_wpm: f32 }` with `Default` (colemak-dh / qwerty / en / Pseudo / true / true / 20 / 80.0); `Config::load(path: &Path) -> Result<Config, ConfigError>` (missing file = default, unknown fields rejected via `#[serde(deny_unknown_fields)]`); `Config::target_interval_ms(&self) -> f32`; `Mode` enum (serde `rename_all = "lowercase"`).
 
-- [ ] **Step 1: Write failing tests** — defaults; partial file keeps other defaults; `target_wpm = 60.0` → `target_interval_ms() == 200.0`; unknown key `foo = 1` errors mentioning `foo`.
-- [ ] **Step 2: Run** — `cargo test -p keytle-core config` → FAIL.
+- [ ] **Step 1: Write failing tests** - defaults; partial file keeps other defaults; `target_wpm = 60.0` → `target_interval_ms() == 200.0`; unknown key `foo = 1` errors mentioning `foo`.
+- [ ] **Step 2: Run** - `cargo test -p keytle-core config` → FAIL.
 - [ ] **Step 3: Implement** `Config`, `Mode`, `ConfigError` (`thiserror`).
-- [ ] **Step 4: Run** — same command → PASS. Then `cargo fmt && cargo clippy -- -D warnings`.
-- [ ] **Step 5: Commit** — `feat: config loading with defaults`.
+- [ ] **Step 4: Run** - same command → PASS. Then `cargo fmt && cargo clippy -- -D warnings`.
+- [ ] **Step 5: Commit** - `feat: config loading with defaults`.
 
 ### Task 3: Layout model and TOML parsing
 
@@ -102,11 +102,11 @@ impl Layout {
 ```
 - `LayoutError` is `thiserror` with variants naming the offending value: `DuplicatePosition{row,col}`, `MultiCharBase{key}`, `UnknownUnlockChar{char}`, `Toml(String)`, `BadGeometry(String)`.
 
-- [ ] **Step 1: Write failing tests** — parse a 3-key inline TOML and assert `key_at`/`position_of_base` round-trip; `from_toml` on duplicate `(1,2)` → `DuplicatePosition`; `base = "ab"` → `MultiCharBase`; `unlock_order.default = ["x"]` on a layout without `x` → `UnknownUnlockChar`; `unlock_order_for("fr")` prefers `fr` over `default`.
-- [ ] **Step 2: Run** — `cargo test -p keytle-core layout` → FAIL.
+- [ ] **Step 1: Write failing tests** - parse a 3-key inline TOML and assert `key_at`/`position_of_base` round-trip; `from_toml` on duplicate `(1,2)` → `DuplicatePosition`; `base = "ab"` → `MultiCharBase`; `unlock_order.default = ["x"]` on a layout without `x` → `UnknownUnlockChar`; `unlock_order_for("fr")` prefers `fr` over `default`.
+- [ ] **Step 2: Run** - `cargo test -p keytle-core layout` → FAIL.
 - [ ] **Step 3: Implement** with `toml::from_str` into a `RawLayout` then validate into `Layout` (TOML uses `[[key]]` with `row`, `col`, `base`, `shift`, `altgr`, `finger`, and `[unlock_order]` tables; `Finger` maps from kebab-case strings).
 - [ ] **Step 4: Run** → PASS. `cargo fmt && cargo clippy -- -D warnings`.
-- [ ] **Step 5: Commit** — `feat: layout model with validated TOML parsing`.
+- [ ] **Step 5: Commit** - `feat: layout model with validated TOML parsing`.
 
 ### Task 4: Bundled layouts and user overrides
 
@@ -115,12 +115,12 @@ impl Layout {
 **Interfaces:**
 - Produces: `layouts::BUNDLED: &[(&str, &str)]` (`id`, source); `layouts::load(id: &str, user_dir: &Path) -> Result<Layout, LayoutError>` (user file `<user_dir>/<id>.toml` replaces the bundled one); `layouts::available(user_dir: &Path) -> Vec<String>`; `layouts::host_ids() -> &'static [&'static str]` (`["qwerty", "azerty"]`).
 
-- [ ] **Step 1: Write failing tests** — every `BUNDLED` id parses and validates; each of the five reference layouts contains all 26 ASCII letters; `colemak-dh` has `f` at `(3,2)` and `u` at `(2,6)`; `bepo` has `é` on the home row; `available()` lists a user `.toml` not in `BUNDLED`; a user file with id `qwerty` wins over the embedded source.
+- [ ] **Step 1: Write failing tests** - every `BUNDLED` id parses and validates; each of the five reference layouts contains all 26 ASCII letters; `colemak-dh` has `f` at `(3,2)` and `u` at `(2,6)`; `bepo` has `é` on the home row; `available()` lists a user `.toml` not in `BUNDLED`; a user file with id `qwerty` wins over the embedded source.
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Author the five layout files** — rows 0–4, `row_offset = [0,1,1,1,2]`, one `[[key]]` per occupied position, `finger` on every letter key, `[unlock_order]` with `default` (home row first: `f j d k s l a ;` for qwerty-family, `q s d f g h j k` style for azerty/bépo as appropriate) and a `fr` override for `azerty`/`bepo`. Include `shift` for every letter and `altgr` where the layout defines it.
+- [ ] **Step 3: Author the five layout files** - rows 0–4, `row_offset = [0,1,1,1,2]`, one `[[key]]` per occupied position, `finger` on every letter key, `[unlock_order]` with `default` (home row first: `f j d k s l a ;` for qwerty-family, `q s d f g h j k` style for azerty/bépo as appropriate) and a `fr` override for `azerty`/`bepo`. Include `shift` for every letter and `altgr` where the layout defines it.
 - [ ] **Step 4: Implement `load`/`available`** with `include_str!` and a `read_dir` scan of the user dir.
-- [ ] **Step 5: Verify** — `cargo test -p keytle-core layouts`, plus `cargo run -p keytle -- layouts list` printing five ids with names.
-- [ ] **Step 6: Commit** — `feat: five bundled layouts with user override`.
+- [ ] **Step 5: Verify** - `cargo test -p keytle-core layouts`, plus `cargo run -p keytle -- layouts list` printing five ids with names.
+- [ ] **Step 6: Commit** - `feat: five bundled layouts with user override`.
 
 ### Task 5: Emulation and reachability
 
@@ -140,11 +140,11 @@ impl Emulator {
 }
 ```
 
-- [ ] **Step 1: Write failing tests** — hand-checked table: qwerty host → colemak-dh target, `typed 'w'` → `Some('w')`, `typed 'e'` → `Some('f')`, `typed 'j'` → `Some('n')`, `typed 'k'` → `Some('e')`; qwerty → gallium `typed 'd'` → `Some('b')`; qwerty → bepo `typed 'e'` → `Some('é')` (accents reachable by position); azerty host → colemak-dh `typed 'a'` → `Some('q')`; a target char on a position the host lacks is not `is_char_reachable` and is listed by `unreachable_chars()`; `host_char_for('é')` on qwerty→bepo is `Some('e')`.
+- [ ] **Step 1: Write failing tests** - hand-checked table: qwerty host → colemak-dh target, `typed 'w'` → `Some('w')`, `typed 'e'` → `Some('f')`, `typed 'j'` → `Some('n')`, `typed 'k'` → `Some('e')`; qwerty → gallium `typed 'd'` → `Some('b')`; qwerty → bepo `typed 'e'` → `Some('é')` (accents reachable by position); azerty host → colemak-dh `typed 'a'` → `Some('q')`; a target char on a position the host lacks is not `is_char_reachable` and is listed by `unreachable_chars()`; `host_char_for('é')` on qwerty→bepo is `Some('e')`.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** reachability as "host has a key at the same `(row,col)` with a `base` (or `shift`/`altgr` whose composed char is deliverable)", and `translate` via `host.position_of_base(typed)` → `target.key_at(pos)`.
-- [ ] **Step 4: Run** — `cargo test -p keytle-core emulate` → PASS.
-- [ ] **Step 5: Commit** — `feat: positional emulation with reachability`.
+- [ ] **Step 4: Run** - `cargo test -p keytle-core emulate` → PASS.
+- [ ] **Step 5: Commit** - `feat: positional emulation with reachability`.
 
 ### Task 6: Corpus parsing, merge and coverage
 
@@ -165,11 +165,11 @@ impl Corpus {
 ```
 - `CorpusError::BadLine { line: usize, reason: String }`.
 
-- [ ] **Step 1: Write failing tests** — `"the 100\ncat 50\n"` parses to two words with frequencies; a line with a combining mark or two spaces in the word → `BadLine` naming the line number; CRLF endings and a leading `\ufeff` parse identically to LF/no-BOM (this also covers Review Focus 4); `"Été à Paris."` survives as one sentence and is *not* covered by ASCII-only `allowed`; `merge` unions words and concatenates sentences; `bigrams()` counts `th`.
+- [ ] **Step 1: Write failing tests** - `"the 100\ncat 50\n"` parses to two words with frequencies; a line with a combining mark or two spaces in the word → `BadLine` naming the line number; CRLF endings and a leading `\ufeff` parse identically to LF/no-BOM (this also covers Review Focus 4); `"Été à Paris."` survives as one sentence and is *not* covered by ASCII-only `allowed`; `merge` unions words and concatenates sentences; `bigrams()` counts `th`.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** with `lines()`, `trim_end_matches('\r')`, BOM strip, `.split_whitespace()`, and `chars().next()`-based coverage (every char of the word must be in `allowed`).
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: corpus parsing, merge and coverage filter`.
+- [ ] **Step 5: Commit** - `feat: corpus parsing, merge and coverage filter`.
 
 ### Task 7: Bundled corpora
 
@@ -178,12 +178,12 @@ impl Corpus {
 **Interfaces:**
 - Produces: `corpora::load(lang: &str, user_dir: &Path) -> Result<Corpus, CorpusError>` merging embedded + `<user_dir>/<lang>/words.txt` + `sentences.txt`; `corpora::languages() -> &'static [&'static str]`.
 
-- [ ] **Step 1: Write failing tests** — `load("en")` yields ≥ 5000 words and ≥ 500 sentences; ids are lowercase and ASCII-letter-only for `en`; `load("fr")` contains `é`; a user `fr/words.txt` with one extra word increases the count by one; unknown language → `CorpusError` naming it.
+- [ ] **Step 1: Write failing tests** - `load("en")` yields ≥ 5000 words and ≥ 500 sentences; ids are lowercase and ASCII-letter-only for `en`; `load("fr")` contains `é`; a user `fr/words.txt` with one extra word increases the count by one; unknown language → `CorpusError` naming it.
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Add the data** — trim each wordlist to ~10k entries with a `head` of a frequency-sorted file, keep sentences short (≤ 80 chars); record source and license per file in `NOTICE.md`.
+- [ ] **Step 3: Add the data** - trim each wordlist to ~10k entries with a `head` of a frequency-sorted file, keep sentences short (≤ 80 chars); record source and license per file in `NOTICE.md`.
 - [ ] **Step 4: Implement** `load` with `include_str!` + optional user files.
 - [ ] **Step 5: Run** → PASS. `cargo clippy -- -D warnings`.
-- [ ] **Step 6: Commit** — `feat: bundled en/fr corpora with license provenance`.
+- [ ] **Step 6: Commit** - `feat: bundled en/fr corpora with license provenance`.
 
 ### Task 8: Typing state machine
 
@@ -204,11 +204,11 @@ impl TypingSession {
 pub struct KeyAgg { pub hits: u32, pub misses: u32, pub mean_dt: u32 }
 ```
 
-- [ ] **Step 1: Write failing tests** — strict: correct keys advance, a wrong key returns `Miss` and leaves the cursor; typing the same wrong key twice only counts one miss (`errors_at_cursor` guard); the wrong key then the right one recovers; lenient: a wrong key advances and counts a miss; `ignore_input()` returns `Ignored` and changes nothing (paste, Review Focus 1); `'T'` where `'t'` is expected is a `Miss`; a backwards timestamp (`now_ms` lower than the previous hit) contributes no interval rather than a negative one; 5-letter text typed at 200 ms/char computes `net_wpm` from the formula `(chars/5) / (minutes)`; `is_complete()` only after the last char.
+- [ ] **Step 1: Write failing tests** - strict: correct keys advance, a wrong key returns `Miss` and leaves the cursor; typing the same wrong key twice only counts one miss (`errors_at_cursor` guard); the wrong key then the right one recovers; lenient: a wrong key advances and counts a miss; `ignore_input()` returns `Ignored` and changes nothing (paste, Review Focus 1); `'T'` where `'t'` is expected is a `Miss`; a backwards timestamp (`now_ms` lower than the previous hit) contributes no interval rather than a negative one; 5-letter text typed at 200 ms/char computes `net_wpm` from the formula `(chars/5) / (minutes)`; `is_complete()` only after the last char.
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Implement** — advance on `Hit`; in strict mode on `Miss` record but do not advance; intervals accumulate only on first-hit-after-advance and ignore gaps > 2000 ms.
+- [ ] **Step 3: Implement** - advance on `Hit`; in strict mode on `Miss` record but do not advance; intervals accumulate only on first-hit-after-advance and ignore gaps > 2000 ms.
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: typing session state machine`.
+- [ ] **Step 5: Commit** - `feat: typing session state machine`.
 
 ### Task 9: Per-key statistics and confidence
 
@@ -226,11 +226,11 @@ impl KeyStat {
 }
 ```
 
-- [ ] **Step 1: Write failing tests** — untouched stat: `accuracy() == 1.0`, `confidence(...) == 0.0` (no speed data); `target_interval_ms = 150.0` with `mean_interval_ms = 150.0` and all hits → `1.0`; `mean_interval_ms = 300.0` → `0.6*0.5 + 0.4*1.0 = 0.7`; accuracy 0.90 → `acc_c == 0.0`; accuracy 0.94 → `0.5`; a single wrong-case key bumps `shift_misses` and leaves `hits`/`misses` alone; EMA: after `record(true, Some(400.0))` then `record(true, Some(100.0))`, `mean_interval_ms == 370.0`.
+- [ ] **Step 1: Write failing tests** - untouched stat: `accuracy() == 1.0`, `confidence(...) == 0.0` (no speed data); `target_interval_ms = 150.0` with `mean_interval_ms = 150.0` and all hits → `1.0`; `mean_interval_ms = 300.0` → `0.6*0.5 + 0.4*1.0 = 0.7`; accuracy 0.90 → `acc_c == 0.0`; accuracy 0.94 → `0.5`; a single wrong-case key bumps `shift_misses` and leaves `hits`/`misses` alone; EMA: after `record(true, Some(400.0))` then `record(true, Some(100.0))`, `mean_interval_ms == 370.0`.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** the two formulas exactly as written in the spec.
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: per-key confidence model`.
+- [ ] **Step 5: Commit** - `feat: per-key confidence model`.
 
 ### Task 10: Profile, unlock rule, session cap
 
@@ -254,11 +254,11 @@ impl Profile {
 }
 ```
 
-- [ ] **Step 1: Write failing tests** — new profile has 4 unlocked letters and confidence gate `Blocked(LowConfidence)`; **deadlock regression**: a layout where two unlocked characters are unreachable and have zero stats still reaches `Unlock` once the reachable characters are strong; accuracy 0.90 on one unlocked key → `Blocked(Accuracy{..})`; three `apply(Unlock(..))` all consume the cap and the fourth returns `Blocked(SessionCap)`; `tick_session` 31 minutes later restores the cap and bumps `session_started_ms`; save→load round-trips `unlocked`, `keys`, `last_unlock`; `absorb` adds hits/misses and increments `tests_completed`.
+- [ ] **Step 1: Write failing tests** - new profile has 4 unlocked letters and confidence gate `Blocked(LowConfidence)`; **deadlock regression**: a layout where two unlocked characters are unreachable and have zero stats still reaches `Unlock` once the reachable characters are strong; accuracy 0.90 on one unlocked key → `Blocked(Accuracy{..})`; three `apply(Unlock(..))` all consume the cap and the fourth returns `Blocked(SessionCap)`; `tick_session` 31 minutes later restores the cap and bumps `session_started_ms`; save→load round-trips `unlocked`, `keys`, `last_unlock`; `absorb` adds hits/misses and increments `tests_completed`.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** with `serde` JSON; creates the parent dir on save.
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: profile with unlock rule and session cap`.
+- [ ] **Step 5: Commit** - `feat: profile with unlock rule and session cap`.
 
 ### Task 11: Lesson generator
 
@@ -271,11 +271,11 @@ pub struct Lesson { pub text: String, pub words: usize, pub note: Option<Note> }
 pub fn generate(layout: &Layout, corpus: &Corpus, lang: &str, unlocked: &BTreeSet<char>, reachable: &BTreeSet<char>, mode: Mode, words: usize, rng: &mut impl rand::Rng) -> Lesson;
 ```
 
-- [ ] **Step 1: Write failing tests** (all with `SmallRng::seed_from_u64`) — 4 unlocked letters produce CVC/VCVC template words, never a letter outside the set, and at least 3 distinct letters appear over 40 words; 8 unlocked letters use the mixed model: every word inside the set, no letter three times consecutively; 14 unlocked letters: no word outside the set; `words` mode returns only real corpus words fully covered by the set, with `note: None`, and falls back to pseudo with `Note::FallbackToPseudo` when fewer than 50 candidates exist; `sentences` mode returns 3 sentences joined by a space with `Note::FullAlphabetSentences` when corpora coverage is below 20; same seed → identical `Lesson` text (determinism); reachable-only: a word containing an unreachable char never appears.
+- [ ] **Step 1: Write failing tests** (all with `SmallRng::seed_from_u64`) - 4 unlocked letters produce CVC/VCVC template words, never a letter outside the set, and at least 3 distinct letters appear over 40 words; 8 unlocked letters use the mixed model: every word inside the set, no letter three times consecutively; 14 unlocked letters: no word outside the set; `words` mode returns only real corpus words fully covered by the set, with `note: None`, and falls back to pseudo with `Note::FallbackToPseudo` when fewer than 50 candidates exist; `sentences` mode returns 3 sentences joined by a space with `Note::FullAlphabetSentences` when corpora coverage is below 20; same seed → identical `Lesson` text (determinism); reachable-only: a word containing an unreachable char never appears.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** the three-tier backoff ladder, weights `w = 0.15 + (1 - confidence)` passed in as `&BTreeMap<char, KeyStat>`, word length 3–8, and the pseudo/real/sentence selection rules.
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: lesson generation with tiny-alphabet backoff`.
+- [ ] **Step 5: Commit** - `feat: lesson generation with tiny-alphabet backoff`.
 
 ### Task 12: Stats store and aggregation
 
@@ -296,11 +296,11 @@ pub fn key_rows(records: &[TestRecord], filter: &Filter, last: usize, target_int
 pub enum Trend { Up, Flat, Down }
 ```
 
-- [ ] **Step 1: Write failing tests** — append then `read_all` round-trips two records; a hand-written file whose last line is half a JSON object returns the first record and an error-free `Ok` (Review Focus 3); `series` on 3 records with timestamps spanning one day and one day later returns indices `[1,2,3]` with no gaps; `series` filters by mode; `personal_best` is per-filter (sentences PB ≠ pseudo PB); `consistency` of identical WPMs is `5.0`; `key_rows` marks a key whose second-half mean interval improved as `Trend::Up`; `key_rows(last = 20)` reads only the last 20 matching records.
+- [ ] **Step 1: Write failing tests** - append then `read_all` round-trips two records; a hand-written file whose last line is half a JSON object returns the first record and an error-free `Ok` (Review Focus 3); `series` on 3 records with timestamps spanning one day and one day later returns indices `[1,2,3]` with no gaps; `series` filters by mode; `personal_best` is per-filter (sentences PB ≠ pseudo PB); `consistency` of identical WPMs is `5.0`; `key_rows` marks a key whose second-half mean interval improved as `Trend::Up`; `key_rows(last = 20)` reads only the last 20 matching records.
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Implement** — one `serde_json` line per record, `OpenOptions::append`, `BufWriter` read loop with a per-line `serde_json::from_str` and a `continue` on the final line only.
+- [ ] **Step 3: Implement** - one `serde_json` line per record, `OpenOptions::append`, `BufWriter` read loop with a per-line `serde_json::from_str` and a `continue` on the final line only.
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: JSONL stats store and test-index series`.
+- [ ] **Step 5: Commit** - `feat: JSONL stats store and test-index series`.
 
 ### Task 13: TUI shell, event loop, resize safety
 
@@ -308,13 +308,13 @@ pub enum Trend { Up, Flat, Down }
 
 **Interfaces:**
 - Consumes: `Config`, `Layout`, `Profile`, `TypingSession`, `Emulator`.
-- Produces: `App { /* config, layout, host, profile, session: Option<TypingSession>, screen: Screen, notice: Option<String> */ }`, `Screen { Typing, Stats, Settings, Help, Results }`; `App::handle_key(KeyEvent) -> Action` (`Action::{Redraw, Quit, StartLesson, Finish}`) — pure, no terminal I/O; `ui::typing::render(frame: &mut Frame, app: &App)`.
+- Produces: `App { /* config, layout, host, profile, session: Option<TypingSession>, screen: Screen, notice: Option<String> */ }`, `Screen { Typing, Stats, Settings, Help, Results }`; `App::handle_key(KeyEvent) -> Action` (`Action::{Redraw, Quit, StartLesson, Finish}`) - pure, no terminal I/O; `ui::typing::render(frame: &mut Frame, app: &App)`.
 
-- [ ] **Step 1: Write failing tests** — `App::handle_key` on `Esc` mid-lesson aborts without finishing; `q` on the typing screen quits; `render` into `ratatui::backend::TestBackend` at 80×24 and 120×40 produces frames with the lesson text; at 40×12 it renders a "terminal too small (80×24 minimum)" notice and does not panic (Review Focus 2); `insta` snapshot of the 80×24 frame.
-- [ ] **Step 2: Run** — `cargo test -p keytle` → FAIL.
+- [ ] **Step 1: Write failing tests** - `App::handle_key` on `Esc` mid-lesson aborts without finishing; `q` on the typing screen quits; `render` into `ratatui::backend::TestBackend` at 80×24 and 120×40 produces frames with the lesson text; at 40×12 it renders a "terminal too small (80×24 minimum)" notice and does not panic (Review Focus 2); `insta` snapshot of the 80×24 frame.
+- [ ] **Step 2: Run** - `cargo test -p keytle` → FAIL.
 - [ ] **Step 3: Implement** the loop: `crossterm::event::poll(16ms)` → `read` → `app.handle_key`; `Event::Resize` just redraws; `Event::Paste` and non-`Char` keys call `session.ignore_input()`.
 - [ ] **Step 4: Run** → PASS, then `cargo run -p keytle` shows a static lesson.
-- [ ] **Step 5: Commit** — `feat: TUI shell with resize-safe rendering`.
+- [ ] **Step 5: Commit** - `feat: TUI shell with resize-safe rendering`.
 
 ### Task 14: Live typing view and keyboard
 
@@ -323,11 +323,11 @@ pub enum Trend { Up, Flat, Down }
 **Interfaces:**
 - Produces: `ui::keyboard::render(frame: &mut Frame, area: Rect, layout: &Layout, next: Option<char>, emulator: Option<&Emulator>, reachable: &BTreeSet<Position>)`; typing view shows elapsed, net/raw WPM, accuracy, the text with typed/current/upcoming styling, and the status notice line.
 
-- [ ] **Step 1: Write failing tests** — keyboard rendered for `colemak-dh` at 80 columns contains `n` and highlights exactly one key cell for `next = Some('e')`; with `emulate = true` on a qwerty host the `é` cell contains both `é` and `e` (subscript); unreachable cells render with `·`; typing view after 3 hits shows `100%` accuracy and a nonzero WPM; after one miss the offending character renders with the error style and accuracy drops below 100%.
+- [ ] **Step 1: Write failing tests** - keyboard rendered for `colemak-dh` at 80 columns contains `n` and highlights exactly one key cell for `next = Some('e')`; with `emulate = true` on a qwerty host the `é` cell contains both `é` and `e` (subscript); unreachable cells render with `·`; typing view after 3 hits shows `100%` accuracy and a nonzero WPM; after one miss the offending character renders with the error style and accuracy drops below 100%.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** geometry from `row_offset` (half-key stagger) using `unicode_width` for cell math.
 - [ ] **Step 4: Run** → PASS + `insta` snapshots updated.
-- [ ] **Step 5: Commit** — `feat: live typing view with keyboard and host legend`.
+- [ ] **Step 5: Commit** - `feat: live typing view with keyboard and host legend`.
 
 ### Task 15: Results screen and stats dashboard
 
@@ -337,11 +337,11 @@ pub enum Trend { Up, Flat, Down }
 - Consumes: `stats::{series, personal_best, consistency, key_rows}`, `engine::Profile`.
 - Produces: `App::finish_lesson()` writing a `TestRecord` via `stats::append`, absorbing stats into the profile, and setting `Screen::Results`; stats view keys: `s`/`S` cycle layout, `l` cycle language, `m` merge modes, `a` all layouts, `tab` back.
 
-- [ ] **Step 1: Write failing tests** — finishing a lesson appends exactly one JSONL line and leaves `Screen::Results`; results screen shows net WPM, raw WPM, accuracy, and the 3 weakest keys; stats view over a fixture file draws `tests 10 … 20 … 30` ticks (X axis is test count, not dates) and shows the PB and consistency; pressing `m` merges modes and marks the header `(merged)`; empty stats file renders an "no tests yet" state without panic.
+- [ ] **Step 1: Write failing tests** - finishing a lesson appends exactly one JSONL line and leaves `Screen::Results`; results screen shows net WPM, raw WPM, accuracy, and the 3 weakest keys; stats view over a fixture file draws `tests 10 … 20 … 30` ticks (X axis is test count, not dates) and shows the PB and consistency; pressing `m` merges modes and marks the header `(merged)`; empty stats file renders an "no tests yet" state without panic.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** charts with block glyphs (`▁▂▃▄▅▆▇█`) for the series, a 2-row braille/block line chart for speed, and the key table sorted by weakness.
 - [ ] **Step 4: Run** → PASS + snapshots.
-- [ ] **Step 5: Commit** — `feat: results and stats dashboard by test index`.
+- [ ] **Step 5: Commit** - `feat: results and stats dashboard by test index`.
 
 ### Task 16: Settings, help, and in-app switching
 
@@ -350,11 +350,11 @@ pub enum Trend { Up, Flat, Down }
 **Interfaces:**
 - Produces: settings screen editing `Config` in memory (layout, host, language, mode, emulate, strict, lesson_words, target_wpm) with `w`/`s` to save to `config.toml`; help screen listing keys; `App::switch_layout(id)` reloading the profile for the new (layout, language) pair.
 
-- [ ] **Step 1: Write failing tests** — toggling `emulate` and saving writes the file and reloads to the same value; `switch_layout("bepo")` loads `bepo.fr.json` when language is `fr` and does not carry over colemak unlocks; help screen lists `esc`, `tab`, `u`, `l`, `s`.
+- [ ] **Step 1: Write failing tests** - toggling `emulate` and saving writes the file and reloads to the same value; `switch_layout("bepo")` loads `bepo.fr.json` when language is `fr` and does not carry over colemak unlocks; help screen lists `esc`, `tab`, `u`, `l`, `s`.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: settings, help and in-app layout switching`.
+- [ ] **Step 5: Commit** - `feat: settings, help and in-app layout switching`.
 
 ### Task 17: CLI subcommands and end-to-end smoke test
 
@@ -363,11 +363,11 @@ pub enum Trend { Up, Flat, Down }
 **Interfaces:**
 - Produces: `keytle run` (default), `keytle stats [--layout L] [--lang L] [--mode M] [--last N]` printing a text dashboard to stdout, `keytle export [--format jsonl|tsv] [-o PATH]`, `keytle layouts list`, `keytle doctor` (paths, resolved config, corpus counts, reachability report listing unreachable chars and the reason).
 
-- [ ] **Step 1: Write failing tests** — `assert_cmd`-free version using `std::process::Command::new(env!("CARGO_BIN_EXE_keytle"))`: `doctor` exit 0 and stdout contains `reachable` and the data dir; `stats` with an empty `KEYTLE_DATA_DIR` exits 0 and prints `no tests yet`; `export --format tsv` on a two-record fixture prints a header line plus two rows.
+- [ ] **Step 1: Write failing tests** - `assert_cmd`-free version using `std::process::Command::new(env!("CARGO_BIN_EXE_keytle"))`: `doctor` exit 0 and stdout contains `reachable` and the data dir; `stats` with an empty `KEYTLE_DATA_DIR` exits 0 and prints `no tests yet`; `export --format tsv` on a two-record fixture prints a header line plus two rows.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** — `feat: stats, export, layouts and doctor subcommands`.
+- [ ] **Step 5: Commit** - `feat: stats, export, layouts and doctor subcommands`.
 
 ### Task 18: Nix flake, modules and checks
 
@@ -377,16 +377,16 @@ pub enum Trend { Up, Flat, Down }
 - Produces: `packages.<system>.default` and `.keytle`, `overlays.default`, `devShells.<system>.default`, `checks.<system>.{fmt,clippy,test}`, `apps.<system>.default`, `nixosModules.default`, `homeModules.default`.
 
 - [ ] **Step 1: Write the flake** using `rustPlatform.buildRustPackage` with `cargoLock.lockFile = ./Cargo.lock` and no runtime data deps.
-- [ ] **Step 2: Verify locally** — `nix build .#` then `./result/bin/keytle doctor`; `nix develop -c cargo test`; `nix flake check`.
-- [ ] **Step 3: Add the modules** — NixOS module takes `enable`, `package`, `settings` (rendered to `config.toml` via `pkgs.formats.toml`); the HM module does the same with `xdg.configFile`.
-- [ ] **Step 4: CI** — `nix flake check` plus `nix build`, on `x86_64-linux`.
-- [ ] **Step 5: Commit** — `feat: nix flake, nixos and home-manager modules`.
+- [ ] **Step 2: Verify locally** - `nix build .#` then `./result/bin/keytle doctor`; `nix develop -c cargo test`; `nix flake check`.
+- [ ] **Step 3: Add the modules** - NixOS module takes `enable`, `package`, `settings` (rendered to `config.toml` via `pkgs.formats.toml`); the HM module does the same with `xdg.configFile`.
+- [ ] **Step 4: CI** - `nix flake check` plus `nix build`, on `x86_64-linux`.
+- [ ] **Step 5: Commit** - `feat: nix flake, nixos and home-manager modules`.
 
 ---
 
 ## Self-Review
 
 - **Spec coverage:** intent/goals → Tasks 1–18; layouts & extensibility → 3–4; emulation & reachability → 5; corpora & languages → 6–7; progression → 9–11; stats by test index → 12, 15; config → 2, 16; Nix first-class → 18; performance budget → release profile (18) plus no-alloc-per-keystroke in 8; testing matrix → each task's tests. Deferred by spec and therefore absent here: `export --html`, `--by-date`.
-- **Types cross-checked:** `Position`, `Key`, `Layout`, `Emulator`, `TypingSession::apply`, `SessionStats`, `KeyAgg`, `KeyStat`, `Profile`, `Verdict`, `TestRecord`, `Filter`, `Point`, `key_rows`, `generate` — each defined once and used with the same signature in later tasks.
+- **Types cross-checked:** `Position`, `Key`, `Layout`, `Emulator`, `TypingSession::apply`, `SessionStats`, `KeyAgg`, `KeyStat`, `Profile`, `Verdict`, `TestRecord`, `Filter`, `Point`, `key_rows`, `generate` - each defined once and used with the same signature in later tasks.
 - **Review Focus** lines 1–5 are pinned in Tasks 8, 13, 12, 6, 3 respectively.
 - **Proportion:** 18 tasks; no task body is transcribed where a signature plus test decides it.

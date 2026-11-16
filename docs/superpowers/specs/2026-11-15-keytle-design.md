@@ -1,4 +1,4 @@
-# keytle — a terminal keyboard-layout trainer
+# keytle - a terminal keyboard-layout trainer
 
 **Status:** design, awaiting approval
 **Date:** 2026-11-15
@@ -9,9 +9,9 @@
 Learn and switch keyboard layouts from the terminal, offline, without an account,
 fast enough to feel instant.
 
-The reference point is [keybr](https://keybr.com): its teaching method — start on a
+The reference point is [keybr](https://keybr.com): its teaching method - start on a
 few home-row letters, generate practice text from the letters you have unlocked,
-introduce new letters as your speed and accuracy on the current set improve — works
+introduce new letters as your speed and accuracy on the current set improve - works
 well. What it gets wrong for this author: it is heavy for a browser page, and its UI
 is busy. This tool keeps the method, drops the weight, and gives the stats the
 respect they deserve.
@@ -20,7 +20,7 @@ respect they deserve.
 
 The author wants to learn Colemak-DH (and try bépo, gallium, azerty) without
 installing every layout system-wide, without a browser, and wants to see *evidence of
-improvement* — per key, per test — rather than a vague daily average.
+improvement* - per key, per test - rather than a vague daily average.
 
 Success: open a terminal, run one command, start typing within two seconds; after a
 week of short sessions the stats view answers "which keys are holding me back, and am
@@ -82,44 +82,44 @@ I actually faster than last Tuesday?" without leaving the app.
 
 ### 1. TUI stack
 
-- **ratatui + crossterm** — picked. Small dependency tree, immediate-mode rendering
+- **ratatui + crossterm** - picked. Small dependency tree, immediate-mode rendering
   with a `TestBackend` that makes snapshot tests trivial, mature and maintained.
-- **cursive** — callback-based, ergonomic for dialogs, but heavier to test and its
+- **cursive** - callback-based, ergonomic for dialogs, but heavier to test and its
   immediate-mode stories are clumsier for a redraw-every-keystroke screen.
-- **egui + wgpu GUI** — would make true keycode-level emulation possible, but it is a
+- **egui + wgpu GUI** - would make true keycode-level emulation possible, but it is a
   window, not a terminal tool, and defeats "light and fast" on the author's terms.
 
 ### 2. Stats presentation
 
-- **A. In-terminal dashboard** — picked. Charts drawn with block/braille glyphs,
+- **A. In-terminal dashboard** - picked. Charts drawn with block/braille glyphs,
   per-key tables, no charting dependency, always available while typing.
-- B. Static HTML/SVG export — prettier, shareable, but leaves the terminal and adds a
+- B. Static HTML/SVG export - prettier, shareable, but leaves the terminal and adds a
   charting dependency; also invites a second, divergent renderer.
-- C. A plus a later `export --html` — kept as an explicitly deferred option: the
+- C. A plus a later `export --html` - kept as an explicitly deferred option: the
   JSONL store is designed so this needs no schema change.
 
 ### 3. Stats storage
 
-- **Append-only JSONL** (`tests.jsonl`) — picked. Volume is tiny (order of a few MB
+- **Append-only JSONL** (`tests.jsonl`) - picked. Volume is tiny (order of a few MB
   per year of daily use), greppable, trivially exportable, no C dependency.
-- **SQLite (rusqlite, bundled)** — bundles SQLite's C source for query power we do not
+- **SQLite (rusqlite, bundled)** - bundles SQLite's C source for query power we do not
   need at this volume, and makes the file opaque to `grep`/`jq`.
 
 ### 4. Code structure
 
-- **Workspace: `keytle-core` + `keytle` (bin)** — picked. The engine, layouts,
+- **Workspace: `keytle-core` + `keytle` (bin)** - picked. The engine, layouts,
   corpora and stats are testable without a terminal, and a future frontend (web, GUI,
   another TUI) can reuse them without reimplementing the pedagogy.
-- Single binary crate — simpler today, but every engine test drags in rendering, and
+- Single binary crate - simpler today, but every engine test drags in rendering, and
   the "extensible" goal implies a public, documented core.
 
 ### 5. Progression model
 
-- **Per-key confidence, keybr-like** — picked, see below. Explicit, tunable, easy to
+- **Per-key confidence, keybr-like** - picked, see below. Explicit, tunable, easy to
   explain in the UI ("`r` needs 12 wpm more").
-- Fixed lesson ladder (hand-authored "lesson 1 = asdf, lesson 2 = ...") — predictable
+- Fixed lesson ladder (hand-authored "lesson 1 = asdf, lesson 2 = ...") - predictable
   but rigid, layout-specific and language-specific busywork.
-- Global WPM threshold unlock — trivial, but unlocks steadily *wrong* keys and hides
+- Global WPM threshold unlock - trivial, but unlocks steadily *wrong* keys and hides
   which key is the problem.
 
 ## Design
@@ -255,7 +255,7 @@ practice text and the profile, never to the layout file, so "French on Colemak-D
 
 Unreachable characters stay in the map but are excluded from every average.
 
-On case: comparison is exact — `T` where `t` is expected is an error. Stats normalise to
+On case: comparison is exact - `T` where `t` is expected is an error. Stats normalise to
 the lowercase letter (`T` and `t` feed one `KeyStat`), and a wrong case increments
 `shift_misses` instead of being blamed on another key. Capitals are never an unlock;
 shift is available from lesson one, which sentence mode needs anyway.
@@ -276,17 +276,22 @@ confidence = 0.6 * speed_c + 0.4 * acc_c
 ```
 
 Unlock rule, evaluated at the end of a completed lesson: if the mean confidence of the
-*reachable* unlocked set ≥ 0.7 **and** no reachable unlocked key has accuracy < 0.93,
+*reachable* unlocked set ≥ 0.6 **and** no reachable unlocked key has accuracy < 0.90,
 unlock the next letter from the layout's unlock order, then the punctuation the current
 language needs (`'`, `,`, `.`, `;`, `:`, `!`, `?`, and for French `é à è ç ù ê î ô û`, in
-that order, skipping any the host cannot reach). One letter per qualifying lesson, max
-three per session, so progress is felt but not dumped. There is no manual override: the
+that order, skipping any the host cannot reach). One letter per qualifying lesson, with
+no cap on how many a session may earn: a typist who already knows the layout should
+reach their real level in one sitting. There is no manual override: the
 rule is the only route to an unlock, so a profile cannot hold a letter the lessons did
 not earn. (An earlier draft had `u` unlock and `l` pin; both bindings were removed.)
 
 Unlock order ships with the layout TOML as a `[unlock_order]` table with a `default`
 list and optional per-language overrides, so a user-added layout works without touching
-the engine.
+the engine. Each list is the *whole* order and is walked start to finish. The bundled
+ones begin with the language's eight most frequent letters the board can type (English
+`e t a o i n s h`, French `e s a i t n r u`), because a home row like AZERTY's `q s d f
+g h j k` yields almost no real words; the layout's home-row order and the remaining rows
+follow, so posture is still taught, just after the letters that make text.
 
 Lesson generation, three modes:
 
@@ -316,7 +321,7 @@ the text is consumed.
 ### Typing rules
 
 Default **strict**: a wrong character is counted as an error (red), the cursor does not
-advance, and the correct key must be typed before continuing — keybr's feel. `lenient`
+advance, and the correct key must be typed before continuing - keybr's feel. `lenient`
 config flag types through mistakes. `esc` aborts (test not recorded), `tab` restarts the
 current lesson, `ctrl-c` quits.
 
@@ -345,9 +350,9 @@ the finger to use. Emulated keys carry the host-subscript.
 makes per-key trends possible without storing every keystroke. Records are appended,
 never rewritten; the file is read fully at startup (a year of daily use is a few MB,
 well under a millisecond to parse at this size; if a user ever exceeds ~50 MB we add a
-compacted summary file — noted as a shortcut, not built now).
+compacted summary file - noted as a shortcut, not built now).
 
-### Stats view (approach A, by test index — not by date)
+### Stats view (approach A, by test index - not by date)
 
 X axis is **test number**, every test is a point. One hundred tests in one day produce
 one hundred points; a day with no practice produces no gap. Smoothing is display-only
@@ -367,7 +372,7 @@ one hundred points; a day with no practice produces no gap. Smoothing is display
 │ n 92% 4.1/5 ▲ │ e 88% 3.9/5 ▲ │ r 71% 2.8/5 ▼  ◀ weakest     │
 │ t 95% 4.6/5   │ a 90% 4.2/5   │ s 84% 3.5/5                   │
 ├ Next unlock ──────────────────────────────────────────────────┤
-│ g — needs 0.72 confidence, you are at 0.61 (accuracy ok)      │
+│ g - needs 0.72 confidence, you are at 0.61 (accuracy ok)      │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -380,8 +385,8 @@ Elements:
 3. **Per-key table**: accuracy, confidence, speed, trend arrow (compare the first half
    of the last 20 tests against the last half), sorted by weakness. Keys are coloured
    by whether they are unlocked or pending, so the table doubles as the unlock map.
-4. **Unlock panel**: next letter, what it needs, and why it isn't unlocked yet — speed
-   or accuracy — so the learner knows how to get there.
+4. **Unlock panel**: next letter, what it needs, and why it isn't unlocked yet - speed
+   or accuracy - so the learner knows how to get there.
 5. **Filter**: series are keyed by **(layout, language, mode)**. The chart shows the
    current mode by default; `m` merges modes into one line (marked as merged);
    `s`/`S` cycles layout and language; `a` toggles across all layouts for a single
@@ -439,7 +444,7 @@ via `rust-toolchain.toml`; `flake.lock` committed. `nix flake check` is the CI g
   coverage filtering by unlocked ∩ reachable; sentence-count reporting.
 - `engine`: confidence formula at boundaries; unlock gating (accuracy floor, mean
   confidence); unreachable keys cannot hold the mean down (regression test for the
-  deadlock); max three unlocks per session; the backoff ladder at 4, 8 and 14 unlocked
+  deadlock); unlocks continue past three in a session; the backoff ladder at 4, 8 and 14 unlocked
   letters over a seeded RNG (no `fjfj` degeneracy); sentences fall back correctly.
 - `stats`: JSONL append/read round-trip; series indexed by test number with unequal time
   gaps; per-key trend from two halves; personal best; consistency.
@@ -454,7 +459,7 @@ buffer; rendering under 1 ms/frame at 80×24; release profile with `lto = "thin"
 
 ## Decisions left to the builder
 
-- Exact EMA coefficient, confidence weights and unlock thresholds — the formulas above
+- Exact EMA coefficient, confidence weights and unlock thresholds - the formulas above
   are the starting point; tune against a scripted "learner" fixture and note changes in
   the code.
 - Chart glyph strategy (braille vs block) and colour palette, including a
