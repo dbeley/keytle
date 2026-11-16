@@ -53,7 +53,15 @@ pub struct Config {
     pub strict: bool,
     pub lesson_words: usize,
     pub target_wpm: f32,
+    /// Start the next lesson automatically once a results screen has been left
+    /// alone for [`AUTO_NEXT_MS`](crate::config::AUTO_NEXT_MS).
+    pub auto_next: bool,
 }
+
+/// How long a results screen waits, untouched, before the next lesson starts.
+/// Lengthy enough to read the three numbers, short enough that a rhythm of
+/// short bursts is not broken by reaching for `enter`.
+pub const AUTO_NEXT_MS: u64 = 3_000;
 
 impl Default for Config {
     fn default() -> Self {
@@ -61,11 +69,14 @@ impl Default for Config {
             layout: "colemak-dh".to_string(),
             host_layout: "qwerty".to_string(),
             language: "en".to_string(),
-            mode: Mode::Pseudo,
+            // Real words from the bundled dictionary, never generated text, is
+            // what a lesson is made of unless the learner asks for otherwise.
+            mode: Mode::Words,
             emulate: true,
             strict: true,
             lesson_words: 20,
             target_wpm: 80.0,
+            auto_next: true,
         }
     }
 }
@@ -126,9 +137,7 @@ impl Config {
             ));
             self.target_wpm = wpm;
         }
-        let words = self
-            .lesson_words
-            .clamp(MIN_LESSON_WORDS, MAX_LESSON_WORDS);
+        let words = self.lesson_words.clamp(MIN_LESSON_WORDS, MAX_LESSON_WORDS);
         if words != self.lesson_words {
             adjusted.push(format!("lesson_words {} → {words}", self.lesson_words));
             self.lesson_words = words;
@@ -173,13 +182,14 @@ impl Config {
                 source,
             });
         }
-        fs::rename(&tmp, path).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })
-        .map_err(|source| ConfigError::Write {
-            path: path.to_path_buf(),
-            source,
-        })
+        fs::rename(&tmp, path)
+            .inspect_err(|_| {
+                let _ = fs::remove_file(&tmp);
+            })
+            .map_err(|source| ConfigError::Write {
+                path: path.to_path_buf(),
+                source,
+            })
     }
 
     /// How long one keystroke may take to match the target speed, counting five
@@ -260,12 +270,13 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_a_pseudo_letter_drill_at_target_speed() {
+    fn defaults_are_a_real_word_drill_at_target_speed() {
         let config = Config::default();
         assert_eq!(config.layout, "colemak-dh");
         assert_eq!(config.host_layout, "qwerty");
         assert_eq!(config.language, "en");
-        assert_eq!(config.mode, Mode::Pseudo);
+        assert_eq!(config.mode, Mode::Words, "lessons use the real dictionary");
+        assert!(config.auto_next, "the next lesson starts on its own");
         assert!(config.emulate);
         assert!(config.strict);
         assert_eq!(config.lesson_words, 20);
@@ -320,6 +331,7 @@ mod tests {
             strict: false,
             lesson_words: 35,
             target_wpm: 62.0,
+            auto_next: false,
         };
         original.save(&path).expect("save");
         assert_eq!(
@@ -347,7 +359,11 @@ mod tests {
             "the interval is finite, not a division by zero"
         );
         assert!(config.target_interval_ms().is_finite());
-        assert_eq!(Config::load(file.path()).unwrap(), config, "load clamps too");
+        assert_eq!(
+            Config::load(file.path()).unwrap(),
+            config,
+            "load clamps too"
+        );
         assert_eq!(
             adjusted_notice(&adjusted).as_deref(),
             Some("settings adjusted: target_wpm 0 → 10")
@@ -384,13 +400,15 @@ mod tests {
         let (config, adjusted) = Config::load_reporting(file.path()).expect("a valid config");
         assert_eq!(config.target_wpm, 62.0);
         assert_eq!(config.lesson_words, 35);
-        assert!(adjusted.is_empty(), "nothing was changed, so nothing is said");
+        assert!(
+            adjusted.is_empty(),
+            "nothing was changed, so nothing is said"
+        );
         assert_eq!(adjusted_notice(&adjusted), None);
         let defaults = Config::default();
         assert!(defaults.target_wpm >= MIN_TARGET_WPM && defaults.target_wpm <= MAX_TARGET_WPM);
         assert!(
-            defaults.lesson_words >= MIN_LESSON_WORDS
-                && defaults.lesson_words <= MAX_LESSON_WORDS
+            defaults.lesson_words >= MIN_LESSON_WORDS && defaults.lesson_words <= MAX_LESSON_WORDS
         );
     }
 
@@ -417,7 +435,10 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(config.clamp().len(), 2);
-        assert!(config.clamp().is_empty(), "already in range, nothing to say");
+        assert!(
+            config.clamp().is_empty(),
+            "already in range, nothing to say"
+        );
     }
 
     #[test]
@@ -457,7 +478,11 @@ mod tests {
             second,
             "the new values are all there"
         );
-        assert!(!tmp.exists(), "a .tmp file was left behind by {}", path.display());
+        assert!(
+            !tmp.exists(),
+            "a .tmp file was left behind by {}",
+            path.display()
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

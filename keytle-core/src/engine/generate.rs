@@ -40,7 +40,12 @@ const MAX_WORD_LEN: usize = 8;
 /// A mastered letter is still drilled at this share of a shaky one's weight.
 const WEIGHT_FLOOR: f32 = 0.15;
 /// `words` mode needs this many typable corpus words before it is worth using.
-const MIN_WORDS_CANDIDATES: usize = 50;
+///
+/// Deliberately low: a four-letter alphabet leaves only a dozen real words in a
+/// ten-thousand-word dictionary, and repeating real words is a better lesson
+/// than switching to pseudo words the moment the list thins out. Below this the
+/// list is too small even to look like text, and the caller falls back.
+const MIN_WORDS_CANDIDATES: usize = 6;
 /// `sentences` mode needs this many typable sentences before it is worth using.
 const MIN_SENTENCES: usize = 20;
 /// Sentences in one sentences-mode lesson.
@@ -705,13 +710,44 @@ mod tests {
     }
 
     #[test]
-    fn words_mode_falls_back_to_pseudo_on_a_tiny_alphabet() {
+    fn words_mode_uses_the_real_dictionary_from_the_first_four_letters() {
+        // t, n, s and e are the first four Colemak-DH letters; the bundled
+        // dictionary still has real words for them (ten, set, nest, …), so an
+        // early learner is never shown generated text by default.
         let allowed = chars("tnse");
         let lesson = generate(
             &colemak(),
             &en(),
             "en",
             &stats("tnse"),
+            &allowed,
+            &allowed,
+            Mode::Words,
+            20,
+            &mut rng(17),
+        );
+        assert_eq!(lesson.note, None, "real words, no fallback");
+        assert_eq!(lesson.words, 20);
+        assert_inside(&lesson.text, &allowed);
+        assert!(
+            words_of(&lesson)
+                .iter()
+                .all(|word| word.chars().count() > 1),
+            "no single-letter filler: {:?}",
+            words_of(&lesson)
+        );
+    }
+
+    #[test]
+    fn words_mode_falls_back_to_pseudo_on_a_tiny_alphabet() {
+        // q, x and z: the dictionary has almost nothing to offer, so the drill
+        // says so and generates text instead of repeating two words.
+        let allowed = chars("qxz");
+        let lesson = generate(
+            &colemak(),
+            &en(),
+            "en",
+            &stats("qxz"),
             &allowed,
             &allowed,
             Mode::Words,
