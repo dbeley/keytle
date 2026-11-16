@@ -12,9 +12,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Screen};
+use crate::app::{App, Screen, UnlockOutcome};
+use keytle_core::engine::profile::{BlockReason, Verdict};
+use keytle_core::stats::Trend;
 
 pub mod keyboard;
+pub mod results;
+pub mod stats;
 pub mod typing;
 
 /// The narrowest terminal the typing view is drawn in.
@@ -33,8 +37,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     match app.screen {
         Screen::Typing => typing::render(frame, app),
-        Screen::Results => results(frame, area, app),
-        Screen::Stats | Screen::Settings | Screen::Help => placeholder(frame, area, app),
+        Screen::Results => results::render(frame, area, app),
+        Screen::Stats => stats::render(frame, area, app),
+        Screen::Settings | Screen::Help => placeholder(frame, area, app),
     }
 }
 
@@ -65,7 +70,6 @@ fn too_small(frame: &mut Frame, area: Rect) {
 /// Screens that later tasks fill in: say so rather than draw something wrong.
 fn placeholder(frame: &mut Frame, area: Rect, app: &App) {
     let title = match app.screen {
-        Screen::Stats => "stats",
         Screen::Settings => "settings",
         Screen::Help => "help",
         _ => "keytle",
@@ -93,38 +97,61 @@ fn placeholder(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// The lesson's totals, once the results screen exists for real.
-fn results(frame: &mut Frame, area: Rect, app: &App) {
-    let stats = app.last_stats.clone().unwrap_or_default();
-    let line = |label: &str, value: String| {
-        Line::from(vec![
-            Span::styled(
-                format!("{label:<12}"),
-                Style::new().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                value,
-                Style::new()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(Color::Cyan),
-            ),
-        ])
+/// A `label   value` line, the shape every screen states a number in.
+pub fn metric_line(label: &str, value: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<12}"), Style::new().fg(Color::DarkGray)),
+        Span::styled(
+            value,
+            Style::new().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+        ),
+    ])
+}
+
+/// The engine's verdict in one line a learner can act on: which letter is next
+/// and, when blocked, exactly how far short it is.
+///
+/// The thresholds come from the engine's own constants, never a copy, so the
+/// message cannot drift from the rule it describes.
+pub fn unlock_line(outcome: &UnlockOutcome) -> String {
+    let Some(ch) = outcome.next else {
+        return "every letter is unlocked".to_string();
     };
-    let lines = vec![
-        line("net wpm", format!("{:.0}", stats.net_wpm)),
-        line("raw wpm", format!("{:.0}", stats.raw_wpm)),
-        line("accuracy", format!("{:.0}%", stats.accuracy * 100.0)),
-        line("seconds", format!("{:.0}", stats.duration_ms as f64 / 1000.0)),
-        Line::from(""),
-        Line::from(Span::styled(
-            "enter or tab starts another lesson  ·  q returns",
-            Style::new().fg(Color::DarkGray),
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title("results")),
-        area,
-    );
+    match outcome.verdict {
+        Verdict::Unlock(_) => format!("{ch} — ready: finishes with an unlock"),
+        Verdict::Blocked(BlockReason::LowConfidence(mean)) => format!(
+            "{ch} — {mean:.2} of {:.2} confidence",
+            keytle_core::engine::profile::UNLOCK_CONFIDENCE
+        ),
+        Verdict::Blocked(BlockReason::Accuracy(key, accuracy)) => format!(
+            "{ch} — {key} is at {:.0}% accuracy, {:.0}% is the floor",
+            accuracy * 100.0,
+            keytle_core::engine::profile::UNLOCK_ACCURACY * 100.0
+        ),
+        Verdict::Blocked(BlockReason::SessionCap) => {
+            format!("{ch} — three unlocks this session; a 30-minute break resets it")
+        }
+        Verdict::Blocked(BlockReason::NoNextKey) => "every letter is unlocked".to_string(),
+    }
+}
+
+/// A duration in the coarse shape a dashboard wants: `3h12m`, `12m`, `45s`.
+pub fn fmt_duration(ms: u64) -> String {
+    let secs = ms / 1000;
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s => format!("{}h{}m", s / 3600, (s % 3600) / 60),
+    }
+}
+
+/// The arrow a trend is drawn with.
+pub fn trend_glyph(trend: Trend) -> &'static str {
+    match trend {
+        Trend::Up => "▲",
+        Trend::Flat => "·",
+        Trend::Down => "▼",
+    }
 }
 
 #[cfg(test)]

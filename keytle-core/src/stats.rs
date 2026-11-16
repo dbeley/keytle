@@ -161,7 +161,7 @@ pub struct Filter {
 }
 
 impl Filter {
-    fn matches(&self, rec: &TestRecord) -> bool {
+    pub fn matches(&self, rec: &TestRecord) -> bool {
         self.layout.as_deref().is_none_or(|l| l == rec.layout)
             && self.lang.as_deref().is_none_or(|l| l == rec.lang)
             && self.mode.is_none_or(|m| m == rec.mode)

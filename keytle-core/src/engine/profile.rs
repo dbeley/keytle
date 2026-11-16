@@ -35,11 +35,11 @@ const INITIAL_UNLOCKED: usize = 4;
 /// Unlocks allowed in one session.
 const MAX_UNLOCKS_PER_SESSION: u8 = 3;
 /// Idle time after which the session (and its unlock budget) restarts.
-const SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
+pub const SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
 /// Mean confidence the reachable unlocked keys must reach.
-const UNLOCK_CONFIDENCE: f32 = 0.7;
+pub const UNLOCK_CONFIDENCE: f32 = 0.7;
 /// Hard accuracy floor: below this, nothing unlocks.
-const UNLOCK_ACCURACY: f32 = 0.93;
+pub const UNLOCK_ACCURACY: f32 = 0.93;
 /// The rung after the letters: punctuation prose needs, whatever the language.
 const PUNCTUATION: &[char] = &['\'', ',', '.', ';', ':', '!', '?'];
 /// The rung after the punctuation for French: its accented letters.
@@ -271,7 +271,7 @@ impl Profile {
     /// is unlocked the rung after them is the punctuation prose needs, then the
     /// accented letters French needs; a character the layout has no key for, or
     /// the host keyboard cannot press, is skipped rather than blocking the rung.
-    fn next_key(&self, layout: &Layout, lang: &str, reachable: &BTreeSet<char>) -> Option<char> {
+    pub fn next_key(&self, layout: &Layout, lang: &str, reachable: &BTreeSet<char>) -> Option<char> {
         if let Some(ch) = layout
             .unlock_order_for(lang)
             .into_iter()

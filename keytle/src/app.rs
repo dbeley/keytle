@@ -15,23 +15,24 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use keytle_core::config::Config;
+use keytle_core::config::{Config, Mode};
 use keytle_core::corpora;
 use keytle_core::corpus::{Corpus, CorpusError};
 use keytle_core::emulate::Emulator;
 use keytle_core::engine::generate::{generate, Lesson, Note};
-use keytle_core::engine::profile::Profile;
+use keytle_core::engine::profile::{Profile, Verdict};
 use keytle_core::layout::{Layout, LayoutError, Position};
 use keytle_core::layouts;
 use keytle_core::paths::Paths;
+use keytle_core::stats::{self, Filter, KeyRow, TestRecord};
 use keytle_core::typing::{SessionStats, TypingSession};
 
 /// Which screen is in front.
 ///
-/// Only `Typing` and `Results` are reachable until the stats, settings and help
-/// tasks land; the other three exist so those tasks add a body, not an enum.
+/// `Typing`, `Results` and `Stats` are reachable today; `Settings` and `Help`
+/// exist so their tasks add a body, not an enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "stats, settings and help screens arrive with later tasks")]
+#[allow(dead_code, reason = "settings and help screens arrive with a later task")]
 pub enum Screen {
     Typing,
     Stats,
@@ -62,6 +63,38 @@ pub enum AppError {
     Corpus { lang: String, source: CorpusError },
 }
 
+/// What the stats dashboard is showing. `None` means "every one in the file".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StatsFilter {
+    pub layout: Option<String>,
+    pub lang: Option<String>,
+    /// Fold pseudo/words/sentences into one line; the header says `(merged)`.
+    pub merged: bool,
+}
+
+impl StatsFilter {
+    /// The store filter this selection means. Merging modes is exactly "no mode
+    /// predicate", so the view never folds anything itself.
+    pub fn to_filter(&self, mode: Mode) -> Filter {
+        Filter {
+            layout: self.layout.clone(),
+            lang: self.lang.clone(),
+            mode: (!self.merged).then_some(mode),
+        }
+    }
+}
+
+/// What the unlock rule said, with the letter it was talking about, so a screen
+/// can explain a block instead of only naming the verdict.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnlockOutcome {
+    /// The next letter of the teaching order, if any is left.
+    pub next: Option<char>,
+    pub verdict: Verdict,
+    /// Mean confidence of the reachable unlocked keys, at the same instant.
+    pub mean: Option<f32>,
+}
+
 /// Everything the UI reads: settings, the two boards, the profile, the lesson.
 pub struct App {
     pub config: Config,
@@ -83,11 +116,20 @@ pub struct App {
     /// The character that was just mistyped, for error styling. Cleared by the
     /// next hit.
     pub last_miss: Option<char>,
+    /// The lesson history, in file order. Loaded at start-up, appended on finish.
+    pub records: Vec<TestRecord>,
+    /// The three weakest keys of the last finished lesson, weakest first.
+    pub last_weak: Vec<KeyRow>,
+    /// The unlock rule's answer after the last finished lesson.
+    pub last_unlock: Option<UnlockOutcome>,
+    /// What the stats dashboard is currently filtered to.
+    pub stats: StatsFilter,
     /// Target positions the host board can actually press.
     reachable_positions: BTreeSet<Position>,
     /// Target characters the host board can actually produce.
     reachable_chars: BTreeSet<char>,
     profile_path: PathBuf,
+    tests_path: PathBuf,
 }
 
 impl App {
@@ -126,6 +168,15 @@ impl App {
         };
         let reachable_positions = positions_reachable(&layout, &host, config.emulate);
         let reachable_chars = chars_reachable(&layout, &reachable_positions);
+        let tests_path = paths.tests_file();
+        // An unreadable or corrupted history must not stop the trainer from
+        // starting: the dashboard says so instead, and the typing works.
+        let records = stats::read_all(&tests_path).unwrap_or_default();
+        let stats_filter = StatsFilter {
+            layout: Some(config.layout.clone()),
+            lang: Some(config.language.clone()),
+            merged: false,
+        };
         Ok(App {
             config,
             layout,
@@ -142,6 +193,11 @@ impl App {
             reachable_positions,
             reachable_chars,
             profile_path,
+            tests_path,
+            records,
+            last_weak: Vec::new(),
+            last_unlock: None,
+            stats: stats_filter,
         })
     }
 
@@ -158,11 +214,14 @@ impl App {
                     self.screen = Screen::Typing;
                     self.notice = None;
                 }
+                // `tab` is the dashboard's way back to the keyboard; on results
+                // it is the same as enter, because there is nothing to filter.
+                KeyCode::Tab if self.screen == Screen::Stats => self.screen = Screen::Typing,
                 KeyCode::Enter | KeyCode::Tab => {
                     self.start_lesson(now_ms);
                     return Action::StartLesson;
                 }
-                _ => {}
+                _ => self.other_screen_char(key.code),
             }
             return Action::Redraw;
         }
@@ -182,6 +241,10 @@ impl App {
                 Action::StartLesson
             }
             KeyCode::Char('q') if self.is_idle() => Action::Quit,
+            KeyCode::Char('u') if self.is_idle() => {
+                self.open_stats();
+                Action::Redraw
+            }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.type_char(c, now_ms)
             }
@@ -265,8 +328,12 @@ impl App {
         self.lesson = Some(lesson);
     }
 
-    /// Record a completed lesson: fold its totals into the profile and show the
-    /// results screen. A session that is not complete is left alone.
+    /// Record a completed lesson: append one line to the stats file, fold the
+    /// totals into the profile, act on the unlock rule, and show the results.
+    ///
+    /// A session that is not complete is left alone. The append happens before
+    /// the profile save so a crash between the two costs an unlock, not a test:
+    /// the stats file is the history, and losing a finished lesson is worse.
     pub fn finish_lesson(&mut self, now_ms: u64) {
         let Some(session) = &self.session else {
             return;
@@ -275,20 +342,149 @@ impl App {
             return;
         }
         let stats = session.stats();
+        let unlocked_before = u32::try_from(self.profile.unlocked.len()).unwrap_or(u32::MAX);
+        // The evidence from this lesson is what the rule should judge, so the
+        // fold comes before the verdict.
         self.profile.absorb(&stats);
         self.profile.tick_session(now_ms);
+        let outcome = self.unlock_outcome();
+        let event = self.profile.apply(outcome.verdict, now_ms);
+        let unlocked_after = u32::try_from(self.profile.unlocked.len()).unwrap_or(u32::MAX);
+        let record = TestRecord {
+            v: keytle_core::stats::RECORD_VERSION,
+            ts: rfc3339(now_ms),
+            layout: self.config.layout.clone(),
+            host: self.config.host_layout.clone(),
+            emulated: self.config.emulate,
+            lang: self.config.language.clone(),
+            mode: self.config.mode,
+            lesson: self.profile.lesson_index,
+            wpm: stats.net_wpm,
+            raw_wpm: stats.raw_wpm,
+            accuracy: stats.accuracy,
+            duration_ms: stats.duration_ms,
+            keys: stats.per_key.clone(),
+            unlocked_before,
+            unlocked_after,
+        };
         let mut notice = format!(
             "lesson done — {:.0} wpm, {:.0}% accuracy",
             stats.net_wpm,
             stats.accuracy * 100.0
         );
+        if let Some(event) = event {
+            notice.push_str(&format!(" · unlocked {}", event.ch));
+        }
+        match stats::append(&self.tests_path, &record) {
+            Ok(()) => self.records.push(record),
+            Err(err) => notice.push_str(&format!(" (test not recorded: {err})")),
+        }
+        self.profile.lesson_index = self.profile.lesson_index.saturating_add(1);
         if let Err(err) = self.profile.save(&self.profile_path) {
             notice.push_str(&format!(" (profile not saved: {err})"));
         }
+        let weak = self.weakest_keys();
+        self.last_weak = weak;
+        self.last_unlock = Some(outcome);
         self.notice = Some(notice);
         self.last_stats = Some(stats);
         self.session = None;
         self.screen = Screen::Results;
+    }
+
+    /// Show the dashboard, re-reading the history first so a lesson finished in
+    /// another window (or by another tool) is not invisible.
+    pub fn open_stats(&mut self) {
+        match stats::read_all(&self.tests_path) {
+            Ok(records) => self.records = records,
+            Err(err) => self.notice = Some(format!("stats unreadable: {err}")),
+        }
+        self.screen = Screen::Stats;
+    }
+
+    /// What the unlock rule would say right now, with the letter it is about.
+    pub fn unlock_outcome(&self) -> UnlockOutcome {
+        let target = self.config.target_interval_ms();
+        UnlockOutcome {
+            next: self
+                .profile
+                .next_key(&self.layout, &self.config.language, &self.reachable_chars),
+            verdict: self.profile.verdict(
+                &self.layout,
+                &self.config.language,
+                &self.reachable_chars,
+                target,
+            ),
+            mean: self.profile.mean_confidence(&self.reachable_chars, target),
+        }
+    }
+
+    /// The three weakest keys of the last recorded lesson, weakest first.
+    fn weakest_keys(&self) -> Vec<KeyRow> {
+        let filter = Filter {
+            layout: Some(self.config.layout.clone()),
+            lang: Some(self.config.language.clone()),
+            mode: Some(self.config.mode),
+        };
+        // A window of one: this lesson is what the results screen is about.
+        stats::key_rows(&self.records, &filter, 1, self.config.target_interval_ms())
+            .into_iter()
+            .take(3)
+            .collect()
+    }
+
+    /// Every choice `s` cycles: the configured layout, then the others the file
+    /// mentions, then "all layouts".
+    pub fn layout_choices(&self) -> Vec<Option<String>> {
+        let mut choices = vec![Some(self.config.layout.clone())];
+        choices.extend(self.seen("layout").filter(|id| *id != self.config.layout).map(Some));
+        choices.push(None);
+        choices
+    }
+
+    /// Every choice `l` cycles, the same way as [`App::layout_choices`].
+    pub fn lang_choices(&self) -> Vec<Option<String>> {
+        let mut choices = vec![Some(self.config.language.clone())];
+        choices.extend(self.seen("lang").filter(|id| *id != self.config.language).map(Some));
+        choices.push(None);
+        choices
+    }
+
+    /// The distinct layouts or languages the history mentions, in file order.
+    fn seen(&self, field: &str) -> impl Iterator<Item = String> + '_ {
+        let mut seen: Vec<String> = Vec::new();
+        for rec in &self.records {
+            let value = if field == "layout" { &rec.layout } else { &rec.lang };
+            if !value.is_empty() && !seen.contains(value) {
+                seen.push(value.clone());
+            }
+        }
+        seen.into_iter()
+    }
+
+    /// Handle the letters the non-typing screens own.
+    fn other_screen_char(&mut self, code: KeyCode) {
+        match (self.screen, code) {
+            (Screen::Results, KeyCode::Char('s')) => self.open_stats(),
+            (Screen::Stats, KeyCode::Char('s')) => self.cycle_layout(true),
+            (Screen::Stats, KeyCode::Char('S')) => self.cycle_layout(false),
+            (Screen::Stats, KeyCode::Char('l')) => self.cycle_lang(),
+            (Screen::Stats, KeyCode::Char('m')) => self.stats.merged = !self.stats.merged,
+            (Screen::Stats, KeyCode::Char('a')) => self.stats.layout = None,
+            _ => {}
+        }
+    }
+
+    /// Step the layout choice forward (`s`) or back (`S`).
+    fn cycle_layout(&mut self, forward: bool) {
+        let list = self.layout_choices();
+        self.stats.layout = step(&list, &self.stats.layout, forward);
+    }
+
+    /// Step the language choice, in the same order.
+    fn cycle_lang(&mut self) {
+        let list = self.lang_choices();
+        self.stats.lang = step(&list, &self.stats.lang, true);
     }
 
     /// Bracketed paste and other non-keystroke input: seen and discarded.
@@ -323,6 +519,77 @@ impl App {
     pub fn reachable_positions(&self) -> &BTreeSet<Position> {
         &self.reachable_positions
     }
+}
+
+/// The next choice after `current` in `list`, wrapping at either end.
+fn step(list: &[Option<String>], current: &Option<String>, forward: bool) -> Option<String> {
+    let at = list.iter().position(|c| c == current).unwrap_or(0);
+    let next = if forward {
+        (at + 1) % list.len()
+    } else {
+        (at + list.len() - 1) % list.len()
+    };
+    list[next].clone()
+}
+
+/// The day count of a civil date, and back (Howard Hinnant's `days_from_civil`
+/// and `civil_from_days`). Keeping the pair here means a timestamp needs no date
+/// crate: the record only ever carries RFC 3339 in UTC.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let month = i64::from(month);
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let doe = days - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// An epoch millisecond as RFC 3339 in UTC, the form a `TestRecord` records.
+pub(crate) fn rfc3339(ms: u64) -> String {
+    let secs = i64::try_from(ms / 1000).unwrap_or(i64::MAX);
+    let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
+    let rem = secs.rem_euclid(86_400);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Parse the `YYYY-MM-DDTHH:MM:SSZ` form back to epoch milliseconds. Anything
+/// else (a hand-edited line, a future offset form) is `None`, which the caller
+/// treats as "no timestamp" rather than as an error.
+pub(crate) fn parse_rfc3339(ts: &str) -> Option<u64> {
+    let bytes = ts.as_bytes();
+    if bytes.len() < 20 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
+        return None;
+    }
+    let num = |from: usize, to: usize| -> Option<i64> {
+        ts.get(from..to)?.parse::<i64>().ok()
+    };
+    let (year, month, day) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (hour, minute, second) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let days = days_from_civil(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?);
+    let secs = days * 86_400 + hour * 3600 + minute * 60 + second;
+    Some(u64::try_from(secs.max(0) * 1000).unwrap_or(0))
 }
 
 /// Which target positions the host board also has a key for.
@@ -466,6 +733,27 @@ mod tests {
         assert_eq!(app.screen, Screen::Results);
         assert_eq!(app.profile.tests_completed, 1);
         assert!(app.last_stats.unwrap().accuracy > 0.99);
+
+        // Exactly one JSONL line, and it is a well-formed v1 record that names
+        // the test the results screen is showing.
+        let path = scratch.paths.tests_file();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw.lines().count(), 1, "one finished lesson, one line:\n{raw}");
+        assert_eq!(raw.matches('\n').count(), 1, "the line ends with one newline");
+        let records = stats::read_all(&path).unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.v, keytle_core::stats::RECORD_VERSION);
+        assert!(parse_rfc3339(&record.ts).is_some(), "ts is RFC 3339: {}", record.ts);
+        assert_eq!(record.layout, app.config.layout);
+        assert_eq!(record.host, app.config.host_layout);
+        assert_eq!(record.lang, app.config.language);
+        assert_eq!(record.mode, app.config.mode);
+        assert!(record.wpm > 0.0 && record.duration_ms > 0);
+        assert!(!record.keys.is_empty(), "per-key evidence is recorded");
+        assert_eq!(record.unlocked_before, 4);
+        assert_eq!(record.unlocked_after, u32::try_from(app.profile.unlocked.len()).unwrap());
+        assert_eq!(app.records.len(), 1, "the app remembers what it wrote");
     }
 
     #[test]
