@@ -3,7 +3,7 @@
 //! The frame is checked against [`MIN_WIDTH`]×[`MIN_HEIGHT`] before any screen
 //! draws, and a terminal below it gets a single notice instead of a squeezed
 //! layout. That is the whole resize strategy: nothing is cached, every region is
-//! derived from the area each frame, and no widget indexes the buffer by hand —
+//! derived from the area each frame, and no widget indexes the buffer by hand -
 //! so shrinking the window mid-lesson cannot panic.
 
 use ratatui::layout::{Alignment, Constraint, Layout as UiLayout, Rect};
@@ -96,22 +96,16 @@ pub fn unlock_line(outcome: &UnlockOutcome) -> String {
         return "every letter is unlocked".to_string();
     };
     match outcome.verdict {
-        Verdict::Unlock(_) => format!("{ch} — ready: finishes with an unlock"),
+        Verdict::Unlock(_) => format!("{ch} - ready: finishes with an unlock"),
         Verdict::Blocked(BlockReason::LowConfidence(mean)) => format!(
-            "{ch} — {mean:.2} of {:.2} confidence",
+            "{ch} - {mean:.2} of {:.2} confidence",
             keytle_core::engine::profile::UNLOCK_CONFIDENCE
         ),
         Verdict::Blocked(BlockReason::Accuracy(key, accuracy)) => format!(
-            "{ch} — {key} is at {:.0}% accuracy, {:.0}% is the floor",
+            "{ch} - {key} is at {:.0}% accuracy, {:.0}% is the floor",
             accuracy * 100.0,
             keytle_core::engine::profile::UNLOCK_ACCURACY * 100.0
         ),
-        Verdict::Blocked(BlockReason::SessionCap) => {
-            format!(
-                "{ch} — three unlocks this session; a {} break resets it",
-                fmt_duration(keytle_core::engine::profile::SESSION_IDLE_MS)
-            )
-        }
         Verdict::Blocked(BlockReason::NoNextKey) => "every letter is unlocked".to_string(),
     }
 }
@@ -228,7 +222,7 @@ mod tests {
                 "{width}x{height} must explain itself:\n{text}"
             );
             assert!(
-                !text.contains("keytle —"),
+                !text.contains("keytle -"),
                 "{width}x{height} must not draw the view"
             );
             let _ = std::fs::remove_dir_all(base);

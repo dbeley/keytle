@@ -5,16 +5,18 @@
 //! been finished, so the app can be closed at any moment and resume exactly where
 //! it stopped.
 //!
-//! The unlock rule is deliberately conservative and doubly gated:
+//! The unlock rule is doubly gated:
 //!
 //! * the mean [`confidence`](KeyStat::confidence) of the **reachable** unlocked
-//!   keys must reach 0.7, and
-//! * no reachable unlocked key may sit below 0.93 accuracy,
+//!   keys must reach 0.6, and
+//! * no reachable unlocked key may sit below 0.9 accuracy,
 //!
-//! with at most three unlocks per session (a session expires after thirty idle
-//! minutes). Keys the host keyboard cannot produce are *excluded* from both
-//! checks: an emulated layout may unlock a letter the host cannot type at all, and
-//! leaving it in the average would deadlock progression forever.
+//! with no ceiling on how many letters one session may unlock: a typist who
+//! already knows the layout should be able to climb to their real level in an
+//! afternoon rather than three letters at a time. Keys the host keyboard cannot
+//! produce are *excluded* from both checks: an emulated layout may unlock a
+//! letter the host cannot type at all, and leaving it in the average would
+//! deadlock progression forever.
 //!
 //! Serialisation is JSON: a profile is small, human-inspectable and versioned by
 //! its own field set.
@@ -32,14 +34,12 @@ use crate::typing::SessionStats;
 
 /// Letters unlocked on a brand-new profile.
 const INITIAL_UNLOCKED: usize = 4;
-/// Unlocks allowed in one session.
-const MAX_UNLOCKS_PER_SESSION: u8 = 3;
-/// Idle time after which the session (and its unlock budget) restarts.
+/// Idle time after which the session counter restarts.
 pub const SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
 /// Mean confidence the reachable unlocked keys must reach.
-pub const UNLOCK_CONFIDENCE: f32 = 0.7;
+pub const UNLOCK_CONFIDENCE: f32 = 0.6;
 /// Hard accuracy floor: below this, nothing unlocks.
-pub const UNLOCK_ACCURACY: f32 = 0.93;
+pub const UNLOCK_ACCURACY: f32 = 0.90;
 /// The rung after the letters: punctuation prose needs, whatever the language.
 const PUNCTUATION: &[char] = &['\'', ',', '.', ';', ':', '!', '?'];
 /// The rung after the punctuation for French: its accented letters.
@@ -71,8 +71,6 @@ pub struct UnlockEvent {
 pub enum BlockReason {
     /// Every letter of the teaching order is already unlocked.
     NoNextKey,
-    /// Three unlocks already happened in this session.
-    SessionCap,
     /// The reachable unlocked keys are not confident enough yet.
     LowConfidence(f32),
     /// One reachable unlocked key is not accurate enough: `(key, accuracy)`.
@@ -138,7 +136,7 @@ impl Profile {
     ///
     /// The write is atomic: the JSON goes to `<path>.tmp` in the same directory,
     /// is flushed to disk, and only then renamed over the target. A crash
-    /// mid-write therefore leaves the old profile intact — a truncated durable
+    /// mid-write therefore leaves the old profile intact - a truncated durable
     /// profile would lose every unlocked key.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
@@ -195,9 +193,6 @@ impl Profile {
         let Some(next) = self.next_key(layout, lang, reachable) else {
             return Verdict::Blocked(BlockReason::NoNextKey);
         };
-        if self.unlocks_this_session >= MAX_UNLOCKS_PER_SESSION {
-            return Verdict::Blocked(BlockReason::SessionCap);
-        }
         // A single sloppy key stops the line: speed is worthless if the letter is
         // being missed. The worst reachable key is reported, ties by letter.
         let mut worst: Option<(char, f32)> = None;
@@ -355,7 +350,9 @@ mod tests {
     #[test]
     fn new_profile_unlocks_the_first_four_teaching_letters() {
         let profile = Profile::new(&colemak(), "en", 1_000);
-        assert_eq!(profile.unlocked, chars("tnse"));
+        // The order is frequency-first: the four most common English letters
+        // that Colemak-DH can type, so real words form from lesson one.
+        assert_eq!(profile.unlocked, chars("etao"));
         assert_eq!(profile.layout, "colemak-dh");
         assert_eq!(profile.lang, "en");
         assert!(profile.keys.is_empty());
@@ -370,7 +367,9 @@ mod tests {
     fn a_fresh_profile_is_blocked_for_low_confidence() {
         let profile = Profile::new(&colemak(), "en", 0);
         match profile.verdict(&colemak(), "en", &chars("tnse"), TARGET) {
-            Verdict::Blocked(BlockReason::LowConfidence(c)) => assert!(c < 0.7, "{c}"),
+            Verdict::Blocked(BlockReason::LowConfidence(c)) => {
+                assert!(c < UNLOCK_CONFIDENCE, "{c}");
+            }
             other => panic!("expected low confidence, got {other:?}"),
         }
     }
@@ -380,78 +379,73 @@ mod tests {
         let profile = profile_with("tnse");
         assert_eq!(
             profile.verdict(&colemak(), "en", &chars("tnse"), TARGET),
-            Verdict::Unlock('r')
+            Verdict::Unlock('i')
         );
     }
 
     #[test]
     fn two_dead_unreachable_keys_cannot_deadlock_progression() {
-        // `t` and `e` are unlocked but the host keyboard cannot produce them, so
+        // `t` and `o` are unlocked but the host keyboard cannot produce them, so
         // they have no stats at all. They must not be averaged in, or the mean
         // confidence of the remaining letters could never lift above the gate.
-        let profile = profile_with("ns");
+        let profile = profile_with("ea");
         assert!(!profile.keys.contains_key(&'t'));
-        let reachable = chars("ns");
+        let reachable = chars("ea");
         let mean = profile
             .mean_confidence(&reachable, TARGET)
             .expect("two keys");
         assert!((mean - 1.0).abs() < 1e-5, "mean was {mean}");
         assert_eq!(
             profile.verdict(&colemak(), "en", &reachable, TARGET),
-            Verdict::Unlock('r')
+            Verdict::Unlock('i')
         );
     }
 
     #[test]
     fn a_sloppy_reachable_key_blocks_the_unlock() {
-        let mut profile = profile_with("tns");
+        let mut profile = profile_with("tea");
         profile.keys.insert(
             'e',
             KeyStat {
-                hits: 9,
-                misses: 1,
+                hits: 8,
+                misses: 2,
                 shift_misses: 0,
                 mean_interval_ms: 150.0,
             },
         );
-        match profile.verdict(&colemak(), "en", &chars("tnse"), TARGET) {
+        match profile.verdict(&colemak(), "en", &chars("tea"), TARGET) {
             Verdict::Blocked(BlockReason::Accuracy(ch, acc)) => {
                 assert_eq!(ch, 'e');
-                assert!((acc - 0.9).abs() < 1e-5, "accuracy was {acc}");
+                assert!((acc - 0.8).abs() < 1e-5, "accuracy was {acc}");
             }
             other => panic!("expected an accuracy block, got {other:?}"),
         }
     }
 
     #[test]
-    fn three_unlocks_exhaust_the_session_and_the_fourth_is_capped() {
-        let mut profile = profile_with("tnse");
+    fn unlocks_keep_coming_past_three_in_one_session() {
+        let mut profile = profile_with("tns");
         let layout = colemak();
         let reachable = chars("tns");
         let mut chs = Vec::new();
-        for (i, now) in [10, 20, 30].into_iter().enumerate() {
+        for (i, now) in [10, 20, 30, 40].into_iter().enumerate() {
             let verdict = profile.verdict(&layout, "en", &reachable, TARGET);
             let event = profile
                 .apply(verdict, now)
-                .unwrap_or_else(|| panic!("unlock {i}"));
+                .unwrap_or_else(|| panic!("unlock {i} was refused: {verdict:?}"));
             assert_eq!(event.how, UnlockHow::Auto);
             assert_eq!(event.ts_ms, now);
             chs.push(event.ch);
         }
-        assert_eq!(chs, vec!['r', 'i', 'a']);
-        assert_eq!(profile.unlocks_this_session, 3);
+        assert_eq!(chs, vec!['i', 'n', 's', 'h'], "straight down the order");
         assert_eq!(
-            profile.verdict(&layout, "en", &reachable, TARGET),
-            Verdict::Blocked(BlockReason::SessionCap)
-        );
-        assert_eq!(
-            profile.apply(Verdict::Blocked(BlockReason::SessionCap), 40),
-            None
+            profile.unlocks_this_session, 4,
+            "the count is a statistic now"
         );
     }
 
     #[test]
-    fn thirty_idle_minutes_restore_the_cap() {
+    fn thirty_idle_minutes_restart_the_session_counter() {
         let mut profile = profile_with("tns");
         profile.unlocks_this_session = 3;
         profile.session_started_ms = 1_000;
@@ -468,10 +462,25 @@ mod tests {
 
     #[test]
     fn a_fully_unlocked_profile_has_no_next_key() {
+        let layout = colemak();
         let mut profile = profile_with("tnseria");
-        profile.unlocked = chars("tnseriao");
+        profile.unlocked = layout.unlock_order_for("en").into_iter().collect();
+        let reachable: BTreeSet<char> = profile
+            .unlocked
+            .iter()
+            .copied()
+            .chain(PUNCTUATION.iter().copied())
+            .collect();
+        // The letters are done, but the punctuation rung is still to come.
+        assert!(profile.next_key(&layout, "en", &reachable).is_some());
+        profile.unlocked.extend(
+            PUNCTUATION
+                .iter()
+                .copied()
+                .filter(|ch| layout.contains_char(*ch) && reachable.contains(ch)),
+        );
         assert_eq!(
-            profile.verdict(&colemak(), "en", &chars("tnseriao"), TARGET),
+            profile.verdict(&layout, "en", &reachable, TARGET),
             Verdict::Blocked(BlockReason::NoNextKey)
         );
     }
@@ -525,7 +534,7 @@ mod tests {
             .collect();
         assert_eq!(
             profile.verdict(&colemak(), "en", &chars("tnse"), TARGET),
-            Verdict::Unlock('r')
+            Verdict::Unlock('i')
         );
     }
 
@@ -581,7 +590,15 @@ mod tests {
     fn the_punctuation_rung_follows_the_letters() {
         let layout = colemak();
         let mut set: Vec<char> = layout.unlock_order_for("en");
-        assert_eq!(set.len(), 8, "the bundled order is letters only");
+        assert_eq!(
+            set.len(),
+            layout
+                .keys
+                .values()
+                .filter(|key| key.base.is_alphabetic())
+                .count(),
+            "the order covers every letter the board can type"
+        );
         let mut profile = profile_with(&set.iter().collect::<String>());
         profile.unlocked = set.iter().copied().collect();
         let reachable: BTreeSet<char> = set
