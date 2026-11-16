@@ -280,9 +280,9 @@ Unlock rule, evaluated at the end of a completed lesson: if the mean confidence 
 unlock the next letter from the layout's unlock order, then the punctuation the current
 language needs (`'`, `,`, `.`, `;`, `:`, `!`, `?`, and for French `é à è ç ù ê î ô û`, in
 that order, skipping any the host cannot reach). One letter per qualifying lesson, max
-three per session, so progress is felt but not dumped. Manual override: `u` unlocks the
-next letter, `l` locks the current one, both recorded in the profile with a timestamp so
-stats can mark the change.
+three per session, so progress is felt but not dumped. There is no manual override: the
+rule is the only route to an unlock, so a profile cannot hold a letter the lessons did
+not earn. (An earlier draft had `u` unlock and `l` pin; both bindings were removed.)
 
 Unlock order ships with the layout TOML as a `[unlock_order]` table with a `default`
 list and optional per-language overrides, so a user-added layout works without touching

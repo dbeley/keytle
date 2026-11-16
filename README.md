@@ -40,7 +40,6 @@ col = 0
 base = "a"
 shift = "A"
 altgr = "á"
-finger = "left-pinky"
 
 # ...one [[key]] per position...
 
@@ -48,7 +47,12 @@ finger = "left-pinky"
 default = ["t", "n", "s", "e", "r", "i", "a", "o"]
 ```
 
-`en` and `fr` corpora are compiled in, so it works out of the box. `keytle-core`
+A `finger = "left-index"` line is still accepted in a layout file, but nothing
+draws it: the board shows keys, not hands.
+
+`en` and `fr` corpora are compiled in, so it works out of the box: English words
+are the FrequencyWords list checked against a real dictionary, French words come
+from the Lexique 3.83 lexicon, and both keep their published frequencies. `keytle-core`
 can also merge `<dir>/<lang>/words.txt` (`word frequency` per line) and
 `<dir>/<lang>/sentences.txt` on top; the intended location is
 `~/.config/keytle/corpora/<lang>/`, which the TUI reads, so a file dropped there
@@ -65,8 +69,19 @@ is used by the next lesson.
   reaches **0.7** and no key sits below **0.93** accuracy. One more letter then
   unlocks — at most **three per session**, and a session restarts after thirty
   idle minutes, so a lucky streak cannot run away with the alphabet.
-* After the letters come punctuation, then French accents for `fr`. `u` unlocks
-  the next letter by hand; `l` pins the current set.
+* After the letters come punctuation, then French accents for `fr`. Every unlock
+  is automatic: there is no key that skips ahead, so the profile can never hold
+  a letter the lessons did not earn.
+* Lessons are **real dictionary words** (`words` mode) unless the settings say
+  otherwise: the bundled lists are filtered against a real lexicon, so what you
+  type is English or French rather than generated text. `pseudo` still exists
+  for a drill that can use any letter on the first day, and `sentences` types
+  real prose once the alphabet is wide enough.
+* The home screen is the drill's front page: it shows the test count, latest
+  and best speed, consistency and the weakest keys, and every key that leads
+  somewhere (`s` stats, `,` settings, `?` help). A finished test starts the next
+  one by itself after three seconds — or as soon as you type — and `esc` on the
+  results holds it while you read.
 
 ## Install
 
@@ -101,9 +116,14 @@ fails loudly rather than being silently ignored.
 | `keytle export [--format jsonl\|tsv] [-o PATH]` | raw records to stdout or a file |
 | `keytle layouts list` | layout ids with names and source |
 
-Keys: `esc` abort, `tab` restart, `u` unlock next, `l` lock current, `s` stats,
-`?` help, `m` merge modes, `c` chart mode, `w` save settings; `q` quits and `,`
-opens settings from the typing screen.
+Keys: `enter`/`space` start a lesson, `esc` abort, `tab` restart, `s` stats, `?`
+help, `,` settings (an overlay over the typing view: layout, host layout,
+language, mode, emulation, strictness, lesson length, target speed and automatic
+next test), `m` merge modes, `c` chart mode; `q` quits. A settings edit applies
+the moment it is made, and leaving the panel with `esc` (or `w` while still in
+it) writes the file, so there is no unsaved state to lose.
+Progression has no key of its own: the engine unlocks the next letter when a
+lesson clears the gate, and nothing else can.
 
 ## Where data lives
 
@@ -112,13 +132,15 @@ work on them.
 
 ```
 ~/.config/keytle/config.toml        settings: layout, host_layout, language, mode,
-                                    emulate, strict, lesson_words, target_wpm
+                                    emulate, strict, lesson_words, target_wpm,
+                                    auto_next
 ~/.config/keytle/layouts/*.toml     your layouts
 ~/.local/share/keytle/tests.jsonl   one record per finished test
 ~/.local/share/keytle/profiles/     <layout>.<lang>.json — unlocked keys, evidence
 ```
 
-Defaults: Colemak-DH emulated on QWERTY, English, `pseudo`, 20 words, 80 wpm.
+Defaults: Colemak-DH emulated on QWERTY, English, `words`, 20 words, 80 wpm,
+next test after 3 s of an untouched results screen (`auto_next`).
 `KEYTLE_CONFIG_DIR` / `KEYTLE_DATA_DIR` override the roots; otherwise the XDG
 variables, then `~/.config` / `~/.local/share`.
 
