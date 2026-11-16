@@ -15,6 +15,9 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::ui::{fmt_duration, metric_line, unlock_line};
 
+/// How wide the results panel may grow before it stops and centres.
+const PANEL_WIDTH: u16 = 72;
+
 /// Draw the results of the lesson that just finished.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let stats = app.last_stats.clone().unwrap_or_default();
@@ -39,7 +42,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .join("  ·  ")
     };
     lines.push(Line::from(vec![
-        Span::styled(format!("{:<12}", "weakest"), Style::new().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{:<12}", "weakest"),
+            Style::new().fg(Color::DarkGray),
+        ),
         Span::styled(
             weakest,
             Style::new().add_modifier(Modifier::BOLD).fg(Color::Yellow),
@@ -63,20 +69,44 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     if let Some(err) = app.history_error() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(err, Style::new().fg(Color::Yellow))));
+        lines.push(Line::from(Span::styled(
+            err,
+            Style::new().fg(Color::Yellow),
+        )));
     }
 
     lines.push(Line::from(""));
+    // The next lesson starts by itself, and the line counts it down: the point
+    // of a drill of short bursts is not to make the typist hunt for `enter`.
+    let next = match app.auto_next_in_ms() {
+        Some(remaining) => format!(
+            "next test in {}s  ·  start typing now  ·  esc holds it",
+            remaining.div_ceil(1000).max(1)
+        ),
+        None => "enter, tab or any letter starts another lesson".to_string(),
+    };
+    lines.push(Line::from(Span::styled(next, Style::new().fg(Color::Gray))));
     lines.push(Line::from(Span::styled(
-        "enter or tab starts another lesson  ·  s shows your progress  ·  esc back",
+        "s stats  ·  esc home  ·  q quit",
         Style::new().fg(Color::DarkGray),
     )));
 
+    // Sized to the results rather than the terminal: a box that floats over the
+    // board says "read this, then carry on", where a full-screen frame says the
+    // session is over.
+    let width = area.width.saturating_sub(4).min(PANEL_WIDTH);
+    let height = area.height.min(u16::try_from(lines.len()).unwrap_or(0) + 2);
+    let panel = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height.max(3),
+    );
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::bordered().title("results"))
             .wrap(Wrap { trim: true }),
-        area,
+        panel,
     );
 }
 
@@ -92,10 +122,8 @@ mod tests {
     use ratatui::Terminal;
 
     fn scratch(tag: &str) -> (std::path::PathBuf, Paths) {
-        let base = std::env::temp_dir().join(format!(
-            "keytle-results-{}-{tag}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("keytle-results-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let paths = Paths {
@@ -123,10 +151,7 @@ mod tests {
         // so `b` is the weakest key by both accuracy and confidence.
         app.session = Some(TypingSession::new("abc", app.config.strict, 0));
         for (i, typed) in ['a', 'x', 'b', 'c'].into_iter().enumerate() {
-            app.handle_key(
-                ratatui_key(typed),
-                100 + 100 * u64::try_from(i).unwrap(),
-            );
+            app.handle_key(ratatui_key(typed), 100 + 100 * u64::try_from(i).unwrap());
         }
         app.finish_lesson(1_000);
     }
@@ -146,7 +171,9 @@ mod tests {
         assert_eq!(app.screen, Screen::Results);
         assert_eq!(app.last_weak.len(), 3, "all three keys were ranked");
         assert!(
-            app.last_weak.iter().any(|row| row.ch == 'b' && row.accuracy < 0.6),
+            app.last_weak
+                .iter()
+                .any(|row| row.ch == 'b' && row.accuracy < 0.6),
             "the missed key is in the list and reads as half-right: {:?}",
             app.last_weak
         );
@@ -162,7 +189,10 @@ mod tests {
             .find(|line| line.contains("weakest"))
             .unwrap_or_else(|| panic!("no weakest line:\n{text}"));
         assert!(weakest.contains('b'), "the bad key is named:\n{weakest}");
-        assert!(weakest.contains("50%"), "and so is its accuracy:\n{weakest}");
+        assert!(
+            weakest.contains("50%"),
+            "and so is its accuracy:\n{weakest}"
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 

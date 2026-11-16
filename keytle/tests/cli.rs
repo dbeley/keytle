@@ -89,7 +89,10 @@ fn doctor_exits_zero_with_the_data_dir_and_a_reachability_line() {
         text.contains(&scratch.data().display().to_string()),
         "the data dir is named:\n{text}"
     );
-    assert!(text.contains("reachability:"), "a reachability line:\n{text}");
+    assert!(
+        text.contains("reachability:"),
+        "a reachability line:\n{text}"
+    );
     assert!(text.contains("config:"), "{text}");
 }
 
@@ -125,7 +128,10 @@ fn stats_with_a_filter_that_matches_nothing_does_not_claim_the_history_is_empty(
         text.contains("no tests match this filter"),
         "not the empty-store message:\n{text}"
     );
-    assert!(text.contains("mode sentences"), "the filter is named:\n{text}");
+    assert!(
+        text.contains("mode sentences"),
+        "the filter is named:\n{text}"
+    );
     assert!(
         text.contains("1 test recorded for other layouts/languages/modes"),
         "the hidden history is counted:\n{text}"
@@ -202,7 +208,10 @@ fn export_jsonl_to_a_file_writes_the_records() {
     assert!(out.status.success(), "export failed:\n{}", stdout(&out));
     let written = std::fs::read_to_string(&path).expect("the exported file");
     assert_eq!(written.lines().count(), 2, "{written}");
-    assert!(written.lines().all(|line| line.starts_with('{')), "{written}");
+    assert!(
+        written.lines().all(|line| line.starts_with('{')),
+        "{written}"
+    );
 }
 
 #[test]

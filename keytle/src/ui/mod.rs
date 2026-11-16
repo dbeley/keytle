@@ -41,7 +41,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Typing => typing::render(frame, app),
         Screen::Results => results::render(frame, area, app),
         Screen::Stats => stats::render(frame, area, app),
-        Screen::Settings => settings::render(frame, area, app),
+        // Settings is an overlay: the typing view behind it says what the
+        // change will do to the drill.
+        Screen::Settings => {
+            typing::render_backdrop(frame, app);
+            settings::render(frame, area, app);
+        }
         Screen::Help => help::render(frame, area, app),
     }
 }
@@ -179,8 +184,6 @@ mod tests {
             "abort",
             "tab",
             "restart",
-            "unlock next",
-            "lock current",
             "stats",
             "help",
             "quit",
@@ -204,7 +207,11 @@ mod tests {
         assert!(text.contains("colemak-dh"), "{text}");
         assert!(text.contains("target wpm"), "{text}");
         assert!(text.contains("80"), "{text}");
-        assert!(text.contains("config:"), "the footer names the file:\n{text}");
+        assert!(text.contains("auto next"), "every row is drawn:\n{text}");
+        assert!(
+            text.contains("config:"),
+            "the footer names the file:\n{text}"
+        );
         assert!(text.contains("config.toml"), "{text}");
         let _ = std::fs::remove_dir_all(base);
     }

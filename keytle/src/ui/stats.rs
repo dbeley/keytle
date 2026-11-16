@@ -52,7 +52,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
     // The same predicate the store uses, so "total time" describes exactly the
     // points on the chart.
-    let matching: Vec<&TestRecord> = app.records.iter().filter(|rec| filter.matches(rec)).collect();
+    let matching: Vec<&TestRecord> = app
+        .records
+        .iter()
+        .filter(|rec| filter.matches(rec))
+        .collect();
     let total_ms: u64 = matching.iter().map(|rec| rec.duration_ms).sum::<u64>();
     let keys = stats::key_rows(
         &app.records,
@@ -100,8 +104,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     if let Some(err) = app.history_error() {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(err, Style::new().fg(Color::Yellow))))
-                .wrap(Wrap { trim: true }),
+            Paragraph::new(Line::from(Span::styled(
+                err,
+                Style::new().fg(Color::Yellow),
+            )))
+            .wrap(Wrap { trim: true }),
             *rows.next().expect("the error row is planned"),
         );
     }
@@ -118,13 +125,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             _ => shown_max,
         };
         let values: Vec<f32> = shown.iter().map(|point| point.wpm).collect();
-        render_chart(frame, *rows.next().expect("a speed row"), &values, scale, best);
+        render_chart(
+            frame,
+            *rows.next().expect("a speed row"),
+            &values,
+            scale,
+            best,
+        );
     }
     if accuracy_rows {
         // Accuracy is always on its own scale: 0 to 100%, never relative to the
         // best test, so a flat 97% reads as a full column and not as noise.
         let values: Vec<f32> = shown.iter().map(|point| point.accuracy).collect();
-        render_chart(frame, *rows.next().expect("an accuracy row"), &values, 1.0, None);
+        render_chart(
+            frame,
+            *rows.next().expect("an accuracy row"),
+            &values,
+            1.0,
+            None,
+        );
     }
 
     frame.render_widget(
@@ -161,9 +180,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     rows.next(); // the blank separator
     frame.render_widget(
         Paragraph::new(key_lines(app, &keys))
-            .block(Block::bordered().title(format!(
-                "keys · last {KEY_WINDOW} tests · weakest first"
-            )))
+            .block(
+                Block::bordered().title(format!("keys · last {KEY_WINDOW} tests · weakest first")),
+            )
             .wrap(Wrap { trim: true }),
         *rows.next().expect("the key table"),
     );
@@ -213,14 +232,22 @@ fn header(app: &App, filter: &Filter, tests: usize, total_ms: u64) -> String {
 /// height lands in, filling only the cells a bar has not already reached, so
 /// bars above the line still read as full columns.
 fn chart_rows(values: &[f32], max: f32, marker: Option<f32>) -> Vec<String> {
-    let max = if max.is_finite() && max > 0.0 { max } else { 1.0 };
+    let max = if max.is_finite() && max > 0.0 {
+        max
+    } else {
+        1.0
+    };
     let points: Vec<f32> = values.to_vec();
     // Everything above zero shows at least a sliver, so a flat series is a line
     // of blocks rather than a blank panel.
     let full = (CHART_ROWS * LEVELS.len()) as f32;
     let mut grid = vec![vec![' '; points.len()]; CHART_ROWS];
     for (col, value) in points.iter().enumerate() {
-        let value = if value.is_finite() { value.max(0.0) } else { 0.0 };
+        let value = if value.is_finite() {
+            value.max(0.0)
+        } else {
+            0.0
+        };
         let units = ((value / max) * full).ceil().clamp(0.0, full) as usize;
         for (row, line) in grid.iter_mut().enumerate() {
             let base = (CHART_ROWS - 1 - row) * LEVELS.len();
@@ -274,7 +301,13 @@ fn marker_row(records: &[&TestRecord], first: usize, width: usize) -> String {
 /// reading the same series the chart above it just drew.
 fn best_line(shown: &[Point], mode: ChartMode) -> String {
     let speed = matches!(mode, ChartMode::Speed | ChartMode::Both);
-    let value = |point: &Point| if speed { point.wpm } else { point.accuracy * 100.0 };
+    let value = |point: &Point| {
+        if speed {
+            point.wpm
+        } else {
+            point.accuracy * 100.0
+        }
+    };
     let Some(top) = shown
         .iter()
         .filter(|point| value(point).is_finite())
@@ -451,7 +484,9 @@ mod tests {
             host: "qwerty".to_string(),
             emulated: true,
             lang: "en".to_string(),
-            mode: Mode::Pseudo,
+            // The configured default, so the dashboard's default filter sees
+            // these records: the chart is what is under test, not the mode.
+            mode: Mode::Words,
             lesson: 0,
             wpm,
             raw_wpm: wpm + 2.0,
@@ -470,8 +505,20 @@ mod tests {
         let path = paths.tests_file();
         for i in 0..30u64 {
             let start = 1_780_000_000_000 + i * 60_000 + if i >= 15 { 2 * 3_600_000 } else { 0 };
-            let key = ('n', KeyAgg { hits: 10, misses: u32::from(i % 3 == 0), shift_misses: 0, mean_dt: 150 });
-            append(&path, &record(&crate::app::rfc3339(start), 40.0 + i as f32, Some(key))).unwrap();
+            let key = (
+                'n',
+                KeyAgg {
+                    hits: 10,
+                    misses: u32::from(i % 3 == 0),
+                    shift_misses: 0,
+                    mean_dt: 150,
+                },
+            );
+            append(
+                &path,
+                &record(&crate::app::rfc3339(start), 40.0 + i as f32, Some(key)),
+            )
+            .unwrap();
         }
         path
     }
@@ -496,8 +543,14 @@ mod tests {
         assert!(!axis.contains(':'), "no times on the axis:\n{axis}");
         assert!(text.contains("pb "), "{text}");
         assert!(text.contains("consistency"), "{text}");
-        assert!(text.contains("30 tests"), "the count is in the header:\n{text}");
-        assert!(text.contains('▁') || text.contains('█'), "block glyphs are drawn");
+        assert!(
+            text.contains("30 tests"),
+            "the count is in the header:\n{text}"
+        );
+        assert!(
+            text.contains('▁') || text.contains('█'),
+            "block glyphs are drawn"
+        );
         assert!(text.contains('┊'), "the session break is marked:\n{text}");
         let _ = std::fs::remove_dir_all(base);
     }
@@ -514,8 +567,15 @@ mod tests {
         };
 
         terminal.draw(|frame| draw(frame, &app)).unwrap();
-        assert!(screen(&terminal).contains("speed chart"), "{}", screen(&terminal));
-        assert!(screen(&terminal).contains("pb "), "the personal best is named");
+        assert!(
+            screen(&terminal).contains("speed chart"),
+            "{}",
+            screen(&terminal)
+        );
+        assert!(
+            screen(&terminal).contains("pb "),
+            "the personal best is named"
+        );
 
         press(&mut app);
         assert_eq!(app.stats.chart, ChartMode::Accuracy);
@@ -564,7 +624,10 @@ mod tests {
             .lines()
             .position(|row| row.contains(&format!("pb {PB_MARK}")))
             .unwrap_or_else(|| panic!("the line is named under the chart:\n{text}"));
-        assert!(line < label, "the line is on the chart, not the text:\n{text}");
+        assert!(
+            line < label,
+            "the line is on the chart, not the text:\n{text}"
+        );
         // It is a line across the chart, not one lonely cell.
         assert!(
             text.lines().nth(line).unwrap().matches(PB_MARK).count() > 1,
@@ -576,7 +639,10 @@ mod tests {
         assert_eq!(app.stats.chart, ChartMode::Accuracy);
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         let text = screen(&terminal);
-        assert!(!text.contains(PB_MARK), "no pb line on the accuracy chart:\n{text}");
+        assert!(
+            !text.contains(PB_MARK),
+            "no pb line on the accuracy chart:\n{text}"
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -585,7 +651,11 @@ mod tests {
         let (base, paths) = scratch("unlock-marks");
         let path = paths.tests_file();
         for i in 0..6u64 {
-            let mut rec = record(&crate::app::rfc3339(1_780_000_000_000 + i * 60_000), 40.0 + i as f32, None);
+            let mut rec = record(
+                &crate::app::rfc3339(1_780_000_000_000 + i * 60_000),
+                40.0 + i as f32,
+                None,
+            );
             if i == 3 {
                 rec.unlocked_before = 4;
                 rec.unlocked_after = 5;
@@ -622,10 +692,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         assert!(!screen(&terminal).contains("(merged)"));
 
-        app.handle_key(
-            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
-            0,
-        );
+        app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE), 0);
         assert!(app.stats.merged);
         assert_eq!(app.stats.to_filter(Mode::Pseudo).mode, None);
         terminal.draw(|frame| draw(frame, &app)).unwrap();
@@ -644,11 +711,22 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), 0);
         assert_eq!(app.stats.layout, None, "`a` is every layout");
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE), 0);
-        assert_eq!(app.stats.layout.as_deref(), Some("colemak-dh"), "s wraps round");
+        assert_eq!(
+            app.stats.layout.as_deref(),
+            Some("colemak-dh"),
+            "s wraps round"
+        );
         app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE), 0);
-        assert_eq!(app.stats.lang, None, "the second language choice is all of them");
+        assert_eq!(
+            app.stats.lang, None,
+            "the second language choice is all of them"
+        );
         app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), 0);
-        assert_eq!(app.screen, crate::app::Screen::Typing, "tab goes back to typing");
+        assert_eq!(
+            app.screen,
+            crate::app::Screen::Typing,
+            "tab goes back to typing"
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -661,7 +739,10 @@ mod tests {
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         let text = screen(&terminal);
         assert!(text.contains("no tests yet"), "{text}");
-        assert!(text.contains("progress"), "the panel still has a title:\n{text}");
+        assert!(
+            text.contains("progress"),
+            "the panel still has a title:\n{text}"
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 

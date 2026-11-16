@@ -75,7 +75,9 @@ impl Emulator {
         let producible = target
             .keys
             .iter()
-            .filter_map(|(pos, target_key)| host.key_at(*pos).map(|host_key| (host_key, target_key)))
+            .filter_map(|(pos, target_key)| {
+                host.key_at(*pos).map(|host_key| (host_key, target_key))
+            })
             .flat_map(|(host_key, target_key)| {
                 [Level::Base, Level::Shift, Level::Altgr]
                     .into_iter()

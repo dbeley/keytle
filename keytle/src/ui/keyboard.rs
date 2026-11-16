@@ -7,11 +7,15 @@
 //! sit above its base (`é` over `e`) and the host legend, when emulating, below
 //! it. A legend the host board cannot produce at its level is drawn as `·`,
 //! which is the honest thing to show for a key that will never deliver it.
+//!
+//! The board is centred in its area rather than drawn from the left edge: it is
+//! a picture of a keyboard under the lesson, not a table, and centring keeps the
+//! board under the text on a wide terminal.
 
 use std::collections::BTreeSet;
 
 use keytle_core::emulate::Emulator;
-use keytle_core::layout::{Finger, Layout, Position};
+use keytle_core::layout::{Layout, Position};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -33,26 +37,81 @@ pub fn next_key_style() -> Style {
         .fg(Color::Cyan)
 }
 
-/// How tall one key cell is: three rows when the layout has altgr legends,
-/// two when it has none.
-pub fn cell_height(layout: &Layout) -> u16 {
-    if layout.keys.values().any(|key| key.altgr.is_some()) {
-        3
-    } else {
-        2
+/// Which extra legends a key cell has to hold, and therefore how tall it is.
+///
+/// The base legend always takes a row. An altgr legend takes the row above it,
+/// and the host legend a row below: a board showing neither needs one row per
+/// key, not three rows of mostly blank cells. The altgr row is only drawn when
+/// the level can produce something at all — a whole row of `·` says no more
+/// than the one dot it replaces, and it is a quarter of the board's height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Legends {
+    pub altgr: bool,
+    pub host: bool,
+}
+
+impl Legends {
+    /// The legends this board can usefully show, given the reachable set.
+    ///
+    /// The altgr row is only worth its height when the level is actually there:
+    /// an emulated Colemak-DH board on a QWERTY host can type three of its
+    /// forty-six altgr legends, and a row holding three glyphs and forty-three
+    /// blanks is neither readable nor honest about what the board offers. When
+    /// at least half the level is reachable, the level is real and is drawn —
+    /// with the individual legends that are not reachable left out.
+    pub fn of(layout: &Layout, emulated: bool, reachable: &BTreeSet<char>) -> Legends {
+        let with_altgr = layout
+            .keys
+            .values()
+            .filter(|key| key.altgr.is_some())
+            .count();
+        let live = layout
+            .keys
+            .values()
+            .filter(|key| key.altgr.is_some_and(|ch| reachable.contains(&ch)))
+            .count();
+        Legends {
+            altgr: with_altgr > 0 && live * 2 >= with_altgr,
+            host: emulated,
+        }
     }
 }
 
+/// How tall one key cell is, given what has to be drawn in it.
+pub fn cell_height(legends: Legends) -> u16 {
+    1 + u16::from(legends.altgr) + u16::from(legends.host)
+}
+
 /// The whole board's height for this layout.
-pub fn board_height(layout: &Layout) -> u16 {
-    u16::from(ROWS_SHOWN) * cell_height(layout)
+pub fn board_height(legends: Legends) -> u16 {
+    u16::from(ROWS_SHOWN) * cell_height(legends)
+}
+
+/// How wide the board is drawn, stagger included, so it can be centred.
+pub fn board_width(layout: &Layout) -> u16 {
+    let mut widest = 0;
+    for pos in layout.keys.keys().filter(|pos| pos.row < ROWS_SHOWN) {
+        let stagger = u16::from(
+            layout
+                .row_offset
+                .get(usize::from(pos.row))
+                .copied()
+                .unwrap_or(0),
+        );
+        let right = stagger * (KEY_WIDTH / 2) + (u16::from(pos.col) + 1) * KEY_WIDTH;
+        widest = widest.max(right);
+    }
+    widest
 }
 
 /// Every key's cell rectangle, in row-major position order. Cells that do not
 /// fit inside `area` are dropped rather than clipped, so a render can never
 /// write outside the frame.
-pub fn key_rects(layout: &Layout, area: Rect) -> Vec<(Position, Rect)> {
-    let height = cell_height(layout);
+pub fn key_rects(layout: &Layout, area: Rect, legends: Legends) -> Vec<(Position, Rect)> {
+    let height = cell_height(legends);
+    // The board is centred in the area, never wider than it: a narrow terminal
+    // loses the rightmost keys to the `fits` check instead of clipping them.
+    let left = area.x + area.width.saturating_sub(board_width(layout)) / 2;
     let mut rects = Vec::with_capacity(layout.keys.len());
     for pos in layout.keys.keys() {
         if pos.row >= ROWS_SHOWN {
@@ -65,7 +124,7 @@ pub fn key_rects(layout: &Layout, area: Rect) -> Vec<(Position, Rect)> {
                 .copied()
                 .unwrap_or(0),
         );
-        let x = area.x + stagger * (KEY_WIDTH / 2) + u16::from(pos.col) * KEY_WIDTH;
+        let x = left + stagger * (KEY_WIDTH / 2) + u16::from(pos.col) * KEY_WIDTH;
         let y = area.y + u16::from(pos.row) * height;
         let rect = Rect::new(x, y, KEY_WIDTH, height);
         let fits = rect.x.saturating_add(rect.width) <= area.x.saturating_add(area.width)
@@ -96,9 +155,11 @@ pub fn render(
             .find(|(_, key)| key.base == want || key.shift == Some(want) || key.altgr == Some(want))
             .map(|(pos, _)| *pos)
     });
-    let altgr_row = cell_height(layout) == 3;
+    let emulated = emulator.is_some();
+    let legends = Legends::of(layout, emulated, reachable);
+    let altgr_row = legends.altgr;
     let buf = frame.buffer_mut();
-    for (pos, rect) in key_rects(layout, area) {
+    for (pos, rect) in key_rects(layout, area, legends) {
         let Some(key) = layout.key_at(pos) else {
             continue;
         };
@@ -111,39 +172,34 @@ pub fn render(
         if highlighted {
             fill(buf, rect, next_key_style());
         }
-        if !reachable.contains(&key.base) {
-            put_center(buf, rect, base_row(rect, altgr_row), UNREACHABLE, dim());
-            continue;
-        }
+        // The altgr level is a level of its own: an `é` the host has no altgr
+        // legend for is not typeable just because the base is, so it is not
+        // offered. A dot on every key that lacks one would bury the few legends
+        // the level *does* deliver, and the unreachable list is what
+        // `keytle doctor` is for.
         if altgr_row {
-            if let Some(altgr) = key.altgr {
-                // The altgr level is a level of its own: an `é` the host has no
-                // altgr legend for is not typeable just because the base is, so
-                // it is marked out of reach rather than offered silently.
-                let legend = if reachable.contains(&altgr) {
-                    altgr.to_string()
-                } else {
-                    UNREACHABLE.to_string()
-                };
-                put_center(buf, rect, rect.y, &legend, dim());
+            if let Some(altgr) = key.altgr.filter(|ch| reachable.contains(ch)) {
+                put_center(buf, rect, rect.y, &altgr.to_string(), dim());
             }
         }
-        put_center(
-            buf,
-            rect,
-            base_row(rect, altgr_row),
-            &key.base.to_string(),
-            base_style,
-        );
-        let host_row = rect.y + cell_height(layout) - 1;
-        if let Some(emulator) = emulator {
-            if let Some(host) = emulator.host_char_for(key.base) {
-                put_center(buf, rect, host_row, &host.to_string(), dim());
+        // A base the host cannot produce is a dot: that is the one legend whose
+        // absence would silently mislead, because the key looks typable.
+        if reachable.contains(&key.base) {
+            put_center(
+                buf,
+                rect,
+                base_row(rect, altgr_row),
+                &key.base.to_string(),
+                base_style,
+            );
+            if let Some(emulator) = emulator {
+                let host_row = rect.y + cell_height(legends) - 1;
+                if let Some(host) = emulator.host_char_for(key.base) {
+                    put_center(buf, rect, host_row, &host.to_string(), dim());
+                }
             }
-        } else if highlighted {
-            if let Some(finger) = key.finger {
-                put_center(buf, rect, host_row, finger_short(finger), dim());
-            }
+        } else {
+            put_center(buf, rect, base_row(rect, altgr_row), UNREACHABLE, dim());
         }
     }
 }
@@ -153,9 +209,7 @@ fn base_row(rect: Rect, altgr_row: bool) -> u16 {
 }
 
 fn dim() -> Style {
-    Style::new()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::DIM)
+    Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM)
 }
 
 /// Paint the whole cell so a highlighted key reads as one block.
@@ -181,36 +235,6 @@ fn put_center(buf: &mut Buffer, rect: Rect, y: u16, text: &str, style: Style) {
     buf.set_string(x, y, text, style);
 }
 
-/// Where a finger sits, in the words the status line uses.
-pub fn finger_name(finger: Finger) -> &'static str {
-    match finger {
-        Finger::LeftPinky => "left-pinky",
-        Finger::LeftRing => "left-ring",
-        Finger::LeftMiddle => "left-middle",
-        Finger::LeftIndex => "left-index",
-        Finger::Thumb => "thumb",
-        Finger::RightIndex => "right-index",
-        Finger::RightMiddle => "right-middle",
-        Finger::RightRing => "right-ring",
-        Finger::RightPinky => "right-pinky",
-    }
-}
-
-/// A two-letter stand-in that fits under a key.
-fn finger_short(finger: Finger) -> &'static str {
-    match finger {
-        Finger::LeftPinky => "LP",
-        Finger::LeftRing => "LR",
-        Finger::LeftMiddle => "LM",
-        Finger::LeftIndex => "LI",
-        Finger::Thumb => "TH",
-        Finger::RightIndex => "RI",
-        Finger::RightMiddle => "RM",
-        Finger::RightRing => "RR",
-        Finger::RightPinky => "RP",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,16 +257,35 @@ mod tests {
             .collect()
     }
 
-    fn draw(id: &str, next: Option<char>, emulator: Option<&Emulator>, width: u16) -> Terminal<TestBackend> {
+    fn draw(
+        id: &str,
+        next: Option<char>,
+        emulator: Option<&Emulator>,
+        width: u16,
+    ) -> Terminal<TestBackend> {
         let layout = layout(id);
-        let area = Rect::new(0, 0, width, board_height(&layout) + 2);
         let reachable = match emulator {
             Some(em) => em.reachable_chars(),
             None => all_chars(&layout),
         };
+        draw_with(&layout, next, emulator, width, &reachable)
+    }
+
+    /// Draw a board with an explicit reachable set, the way a caller that knows
+    /// the alphabet would, and hand back the legends it was drawn with so the
+    /// test can measure the same cells.
+    fn draw_with(
+        layout: &Layout,
+        next: Option<char>,
+        emulator: Option<&Emulator>,
+        width: u16,
+        reachable: &BTreeSet<char>,
+    ) -> Terminal<TestBackend> {
+        let legends = Legends::of(layout, emulator.is_some(), reachable);
+        let area = Rect::new(0, 0, width, board_height(legends) + 2);
         let mut terminal = Terminal::new(TestBackend::new(width, area.height)).unwrap();
         terminal
-            .draw(|frame| render(frame, area, &layout, next, emulator, &reachable))
+            .draw(|frame| render(frame, area, layout, next, emulator, reachable))
             .unwrap();
         terminal
     }
@@ -299,7 +342,10 @@ mod tests {
         }
         assert_eq!(
             text.lines().count(),
-            usize::from(board_height(&layout("colemak-dh"))) + 2,
+            usize::from(board_height(Legends {
+                altgr: true,
+                host: false
+            })) + 2,
             "the board is drawn inside its area"
         );
     }
@@ -307,13 +353,21 @@ mod tests {
     #[test]
     fn exactly_one_key_cell_is_highlighted_for_the_next_character() {
         let layout = layout("colemak-dh");
-        let area = Rect::new(0, 0, 80, board_height(&layout));
+        let legends = Legends {
+            altgr: true,
+            host: false,
+        };
+        let area = Rect::new(0, 0, 80, board_height(legends));
         let terminal = draw("colemak-dh", Some('e'), None, 80);
-        let rects = key_rects(&layout, area);
+        let rects = key_rects(&layout, area, legends);
         let style = next_key_style();
         let highlighted = cells_with_style(&terminal, style, &rects);
         assert_eq!(highlighted.len(), 1, "one key, not {highlighted:?}");
-        let rect = rects.iter().find(|(pos, _)| *pos == highlighted[0]).unwrap().1;
+        let rect = rects
+            .iter()
+            .find(|(pos, _)| *pos == highlighted[0])
+            .unwrap()
+            .1;
         assert!(
             cell_text(&terminal, rect).contains('e'),
             "the highlighted cell is the one that types e"
@@ -325,9 +379,11 @@ mod tests {
         let layout = layout("colemak-dh");
         let host = layout_of("qwerty");
         let emulator = Emulator::new(host, layout.clone());
-        let area = Rect::new(0, 0, 80, board_height(&layout));
+        let reachable = emulator.reachable_chars();
+        let legends = Legends::of(&layout, true, &reachable);
+        let area = Rect::new(0, 0, 80, board_height(legends));
         let terminal = draw("colemak-dh", None, Some(&emulator), 80);
-        let rects = key_rects(&layout, area);
+        let rects = key_rects(&layout, area, legends);
         let e_rect = rects
             .iter()
             .find(|(pos, _)| {
@@ -338,7 +394,10 @@ mod tests {
             .expect("colemak-dh has an e key");
         let text = cell_text(&terminal, e_rect);
         assert!(text.contains('e'), "the base legend is drawn: {text:?}");
-        assert!(text.contains('k'), "qwerty's k subscript sits below: {text:?}");
+        assert!(
+            text.contains('k'),
+            "qwerty's k subscript sits below: {text:?}"
+        );
     }
 
     #[test]
@@ -346,33 +405,44 @@ mod tests {
         // A key whose character the host cannot produce has to be visibly out of
         // reach rather than silently pretending to be typeable.
         let layout = layout("colemak-dh");
-        let area = Rect::new(0, 0, 80, board_height(&layout));
         let mut reachable = all_chars(&layout);
         reachable.remove(&'n');
-        let mut terminal = Terminal::new(TestBackend::new(80, area.height)).unwrap();
-        terminal
-            .draw(|frame| render(frame, area, &layout, None, None, &reachable))
-            .unwrap();
+        let legends = Legends::of(&layout, false, &reachable);
+        let area = Rect::new(0, 0, 80, board_height(legends));
+        let terminal = draw_with(&layout, None, None, 80, &reachable);
         let text = rows(&terminal).join("\n");
         assert!(text.contains('·'), "an unreachable key is a dot:\n{text}");
-        let rect = key_rects(&layout, area)
+        let rect = key_rects(&layout, area, legends)
             .into_iter()
             .find(|(pos, _)| *pos == Position::new(2, 6))
             .map(|(_, rect)| rect)
             .unwrap();
-        assert_eq!(cell_text(&terminal, rect).trim(), "·");
+        // The base legend is the dot; the altgr legend above it is reachable on
+        // its own level and stays, because one out-of-reach level says nothing
+        // about the other.
+        let base_row = Rect::new(rect.x, rect.y + 1, rect.width, 1);
+        assert_eq!(cell_text(&terminal, base_row).trim(), "·");
+        let cell = cell_text(&terminal, rect);
+        assert!(
+            cell.contains('ñ') && cell.trim_end().ends_with('·'),
+            "the altgr legend and the out-of-reach base share the cell: {cell:?}"
+        );
     }
 
     #[test]
-    fn an_altgr_legend_the_host_cannot_type_is_a_dot() {
-        // qwerty has no altgr level, so colemak-dh's `é` can never be typed on
-        // it: drawing it as an ordinary legend would offer a key that produces
-        // nothing. The practice alphabet leaves it out, and so must the board.
+    fn an_altgr_legend_that_cannot_be_typed_is_not_offered() {
+        // One altgr legend out of reach, the rest of the level alive: the row is
+        // drawn for the legends that work, and the key that cannot deliver its
+        // own simply does not offer one. (A level with nothing reachable draws
+        // no row at all — see the test below.)
         let layout = layout("colemak-dh");
-        let emulator = Emulator::new(layout_of("qwerty"), layout.clone());
-        let area = Rect::new(0, 0, 80, board_height(&layout));
-        let terminal = draw("colemak-dh", None, Some(&emulator), 80);
-        let e_rect = key_rects(&layout, area)
+        let mut reachable = all_chars(&layout);
+        reachable.remove(&'é');
+        let legends = Legends::of(&layout, false, &reachable);
+        assert!(legends.altgr, "the level still has legends to show");
+        let area = Rect::new(0, 0, 80, board_height(legends));
+        let terminal = draw_with(&layout, None, None, 80, &reachable);
+        let e_rect = key_rects(&layout, area, legends)
             .into_iter()
             .find(|(pos, _)| layout.key_at(*pos).is_some_and(|key| key.base == 'e'))
             .map(|(_, rect)| rect)
@@ -383,12 +453,50 @@ mod tests {
             "the untypeable altgr legend is not offered: {altgr_cell:?}"
         );
         assert!(
-            altgr_cell.trim() == "·",
-            "it is marked out of reach instead: {altgr_cell:?}"
+            altgr_cell.trim().is_empty(),
+            "nothing is drawn in its place: {altgr_cell:?}"
         );
         let text = cell_text(&terminal, e_rect);
-        assert!(text.contains('e'), "the base letter stays typeable: {text:?}");
-        assert!(text.contains('k'), "with qwerty's k below it: {text:?}");
+        assert!(
+            text.contains('e'),
+            "the base letter stays typeable: {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_level_reachable_on_a_handful_of_keys_costs_no_row() {
+        // What an emulated Colemak-DH board on QWERTY actually looks like: three
+        // altgr legends out of forty-six (`*`, backtick and `^`). The level is
+        // not usable, so the board does not spend a row on it.
+        let layout = layout("colemak-dh");
+        let emulator = Emulator::new(layout_of("qwerty"), layout.clone());
+        let reachable = emulator.reachable_chars();
+        let legends = Legends::of(&layout, true, &reachable);
+        assert!(!legends.altgr, "three of forty-six is not a level");
+        assert_eq!(cell_height(legends), 2, "base and host legend only");
+        let terminal = draw("colemak-dh", None, Some(&emulator), 80);
+        let text = rows(&terminal).join("\n");
+        assert!(!text.contains('é'), "no altgr legend is drawn:\n{text}");
+        assert!(text.contains('k'), "the host legend under `e` is:\n{text}");
+    }
+
+    #[test]
+    fn a_level_with_nothing_reachable_costs_no_row() {
+        // Every altgr legend out of reach: an empty level earns no row at all,
+        // and the board is one row shorter rather than a row of blanks.
+        let layout = layout("colemak-dh");
+        let mut reachable = all_chars(&layout);
+        for altgr in layout.keys.values().filter_map(|key| key.altgr) {
+            reachable.remove(&altgr);
+        }
+        let legends = Legends::of(&layout, true, &reachable);
+        assert!(!legends.altgr, "no altgr row");
+        assert!(legends.host, "the host legend row stays");
+        assert_eq!(
+            cell_height(legends),
+            2,
+            "an emulated board with no altgr level is two rows per key"
+        );
     }
 
     #[test]

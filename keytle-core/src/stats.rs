@@ -274,6 +274,12 @@ pub fn key_rows(
     for (slice, half) in [(older, Half::Older), (newer, Half::Newer)] {
         for rec in slice {
             for (ch, agg) in &rec.keys {
+                // The space bar is not a key to practise: it is pressed by
+                // whichever thumb is free, it never holds a letter back, and a
+                // "weakest key" list headed by a blank cell helps nobody.
+                if ch.is_whitespace() {
+                    continue;
+                }
                 let total = totals.entry(*ch).or_default();
                 total.add(agg, half);
             }

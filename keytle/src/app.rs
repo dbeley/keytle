@@ -10,13 +10,18 @@
 //! runs, `q` is a letter to type), and `ctrl-c` always quits. Every other
 //! character is fed to the session — after positional translation when emulation
 //! is on, because the terminal reports the *host* layout's character.
+//!
+//! Nothing in the key map unlocks a letter: progression is the engine's alone,
+//! decided from the evidence of finished lessons (see [`App::finish_lesson`]).
+//! A typist cannot skip ahead by pressing a key, and cannot pin a set either — a
+//! profile that disagrees with the lessons is impossible to produce by hand.
 
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use keytle_core::config::{adjusted_notice, Config, ConfigError, Mode};
+use keytle_core::config::{adjusted_notice, Config, ConfigError, Mode, AUTO_NEXT_MS};
 use keytle_core::corpora;
 use keytle_core::corpus::{Corpus, CorpusError};
 use keytle_core::emulate::Emulator;
@@ -120,6 +125,18 @@ impl StatsFilter {
     }
 }
 
+/// The few numbers the idle (home) screen shows: enough to see where the drill
+/// stands without opening the dashboard, for the *configured* pair and mode.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HomeSummary {
+    pub tests: usize,
+    pub latest_wpm: f32,
+    pub best_wpm: Option<f32>,
+    pub consistency: f32,
+    /// The weakest keys of the recent window, weakest first (at most three).
+    pub weakest: Vec<KeyRow>,
+}
+
 /// What the unlock rule said, with the letter it was talking about, so a screen
 /// can explain a block instead of only naming the verdict.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,7 +151,7 @@ pub struct UnlockOutcome {
 /// The settings screen's editable rows, in the order they are drawn. The index
 /// into this table is the cursor the screen moves, and each row's values come
 /// from [`App::settings_values`].
-pub const SETTINGS_ROWS: [&str; 8] = [
+pub const SETTINGS_ROWS: [&str; 9] = [
     "layout",
     "host layout",
     "language",
@@ -143,7 +160,14 @@ pub const SETTINGS_ROWS: [&str; 8] = [
     "strict",
     "lesson words",
     "target wpm",
+    "auto next",
 ];
+
+/// How long a notice line stays on screen before the hints come back.
+const NOTICE_MS: u64 = 3_000;
+
+/// How many recent tests the home panel's weakest-key list looks at.
+const HOME_KEY_WINDOW: usize = 20;
 
 /// The lesson sizes `settings_cycle` steps through, smallest first.
 const LESSON_WORDS: [usize; 5] = [10, 20, 30, 40, 50];
@@ -165,6 +189,12 @@ pub struct App {
     pub screen: Screen,
     /// One line under the keyboard: an abort, a note, a save failure.
     pub notice: Option<String>,
+    /// The notice [`App::tick`] last saw. Used to stamp the moment a line
+    /// appeared, so every notice expires after [`NOTICE_MS`] without each
+    /// assignment having to carry a clock reading.
+    notice_seen: Option<String>,
+    /// When `notice_seen` should go away; `None` while there is nothing to show.
+    notice_expires_ms: Option<u64>,
     pub lesson_started_ms: u64,
     /// The last finished lesson's totals, for the results screen.
     pub last_stats: Option<SessionStats>,
@@ -180,6 +210,12 @@ pub struct App {
     pub last_weak: Vec<KeyRow>,
     /// The unlock rule's answer after the last finished lesson.
     pub last_unlock: Option<UnlockOutcome>,
+    /// When the results screen appeared, so it can start the next lesson on its
+    /// own once it has been left alone for [`AUTO_NEXT_MS`].
+    results_shown_ms: Option<u64>,
+    /// The last clock reading the app was given, so a countdown can be drawn
+    /// without the view reaching for a clock of its own.
+    clock_ms: u64,
     /// What the stats dashboard is currently filtered to.
     pub stats: StatsFilter,
     /// Target characters the host board can actually produce: the practice
@@ -195,8 +231,6 @@ pub struct App {
     host: Layout,
     /// Which row the settings cursor is on, as an index into [`SETTINGS_ROWS`].
     settings_row: usize,
-    /// The settings as they were when the screen opened: `esc` puts them back.
-    settings_backup: Option<Config>,
     /// What a clamped load had to change, shown once on the settings screen and
     /// then forgotten, so it is a report rather than a permanent banner.
     settings_adjusted: Option<String>,
@@ -216,18 +250,16 @@ impl App {
         let mut config = config;
         let adjusted = config.clamp();
         let layout_dir = paths.layouts_dir();
-        let layout = layouts::load(&config.layout, &layout_dir).map_err(|source| {
-            AppError::Layout {
+        let layout =
+            layouts::load(&config.layout, &layout_dir).map_err(|source| AppError::Layout {
                 id: config.layout.clone(),
                 source,
-            }
-        })?;
-        let host = layouts::load(&config.host_layout, &layout_dir).map_err(|source| {
-            AppError::Layout {
+            })?;
+        let host =
+            layouts::load(&config.host_layout, &layout_dir).map_err(|source| AppError::Layout {
                 id: config.host_layout.clone(),
                 source,
-            }
-        })?;
+            })?;
         let corpus =
             corpora::load(&config.language, Some(&paths.corpora_dir())).map_err(|source| {
                 AppError::Corpus {
@@ -266,6 +298,8 @@ impl App {
             lesson: None,
             screen: Screen::Typing,
             notice: None,
+            notice_seen: None,
+            notice_expires_ms: None,
             lesson_started_ms: now_ms,
             last_stats: None,
             last_miss: None,
@@ -276,10 +310,11 @@ impl App {
             history_error,
             last_weak: Vec::new(),
             last_unlock: None,
+            results_shown_ms: None,
+            clock_ms: now_ms,
             stats: stats_filter,
             paths: paths.clone(),
             settings_row: 0,
-            settings_backup: None,
             settings_adjusted: adjusted_notice(&adjusted),
             help_return: Screen::Typing,
         };
@@ -290,10 +325,16 @@ impl App {
 
     /// Handle one key. Pure: no terminal is touched, and the clock comes in.
     pub fn handle_key(&mut self, key: KeyEvent, now_ms: u64) -> Action {
+        self.clock_ms = now_ms;
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
         {
             return Action::Quit;
+        }
+        // Activity on the results screen holds the automatic next lesson back:
+        // the typist is reading, or about to press one of its own keys.
+        if self.screen == Screen::Results {
+            self.results_shown_ms = Some(now_ms);
         }
         // Settings and help own their keys outright: a stale `enter` must not
         // start a lesson behind a panel.
@@ -314,6 +355,13 @@ impl App {
                 KeyCode::Enter | KeyCode::Tab => {
                     self.start_lesson(now_ms);
                     return Action::StartLesson;
+                }
+                // On the results screen a letter is the next lesson's first
+                // keystroke: the drill continues without a trip through a menu,
+                // and `s`/`?` keep their own meanings below.
+                KeyCode::Char(c) if self.screen == Screen::Results && c != 's' && c != '?' => {
+                    self.start_lesson(now_ms);
+                    return self.type_char(c, now_ms);
                 }
                 _ => self.other_screen_char(key.code),
             }
@@ -345,14 +393,6 @@ impl App {
             }
             KeyCode::Char(',') if self.is_idle() => {
                 self.open_settings();
-                Action::Redraw
-            }
-            KeyCode::Char('u') if self.is_idle() => {
-                self.unlock_next(now_ms);
-                Action::Redraw
-            }
-            KeyCode::Char('l') if self.is_idle() => {
-                self.lock_current();
                 Action::Redraw
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -430,6 +470,7 @@ impl App {
         );
         self.last_miss = None;
         self.lesson_started_ms = now_ms;
+        self.results_shown_ms = None;
         self.screen = Screen::Typing;
         if lesson.text.is_empty() {
             self.session = None;
@@ -504,6 +545,7 @@ impl App {
         self.last_stats = Some(stats);
         self.session = None;
         self.screen = Screen::Results;
+        self.results_shown_ms = Some(now_ms);
     }
 
     /// Switch the layout being taught, and load the profile that belongs to the
@@ -538,21 +580,21 @@ impl App {
     /// not resolve leaves the app exactly as it was.
     fn rebuild(&mut self, now_ms: u64) -> Result<(), AppError> {
         let dir = self.paths.layouts_dir();
-        let layout = layouts::load(&self.config.layout, &dir).map_err(|source| AppError::Layout {
-            id: self.config.layout.clone(),
-            source,
-        })?;
-        let host = layouts::load(&self.config.host_layout, &dir).map_err(|source| AppError::Layout {
-            id: self.config.host_layout.clone(),
-            source,
-        })?;
-        let corpus =
-            corpora::load(&self.config.language, Some(&self.paths.corpora_dir())).map_err(
-                |source| AppError::Corpus {
-                    lang: self.config.language.clone(),
-                    source,
-                },
-            )?;
+        let layout =
+            layouts::load(&self.config.layout, &dir).map_err(|source| AppError::Layout {
+                id: self.config.layout.clone(),
+                source,
+            })?;
+        let host =
+            layouts::load(&self.config.host_layout, &dir).map_err(|source| AppError::Layout {
+                id: self.config.host_layout.clone(),
+                source,
+            })?;
+        let corpus = corpora::load(&self.config.language, Some(&self.paths.corpora_dir()))
+            .map_err(|source| AppError::Corpus {
+                lang: self.config.language.clone(),
+                source,
+            })?;
         self.emulator = Emulator::new(host.clone(), layout.clone());
         self.layout = layout;
         self.host = host;
@@ -564,6 +606,57 @@ impl App {
         self.lesson = None;
         self.last_miss = None;
         Ok(())
+    }
+
+    /// Called by the event loop when no key has arrived: a results screen that
+    /// has been left alone long enough starts the next lesson by itself.
+    ///
+    /// Nothing happens while a lesson runs, on any other screen, or when
+    /// `auto_next` is off — those states have their own ways forward.
+    pub fn tick(&mut self, now_ms: u64) -> Action {
+        self.clock_ms = now_ms;
+        self.expire_notice(now_ms);
+        if self.screen != Screen::Results || !self.config.auto_next {
+            return Action::Redraw;
+        }
+        let Some(shown) = self.results_shown_ms else {
+            return Action::Redraw;
+        };
+        if now_ms.saturating_sub(shown) < AUTO_NEXT_MS {
+            return Action::Redraw;
+        }
+        self.start_lesson(now_ms);
+        Action::StartLesson
+    }
+
+    /// How long the results screen still waits before starting the next lesson,
+    /// or `None` when it will not start one by itself.
+    /// Let a line live long enough to be read, then take it away: a notice that
+    /// stays forever hides the key hints underneath it. The clock starts the
+    /// first time a tick *sees* a notice, so a line set by a keypress, a save or
+    /// a lesson starts its three seconds as soon as the event loop runs again.
+    fn expire_notice(&mut self, now_ms: u64) {
+        if self.notice != self.notice_seen {
+            self.notice_seen.clone_from(&self.notice);
+            self.notice_expires_ms = self.notice.as_ref().map(|_| now_ms + NOTICE_MS);
+            return;
+        }
+        let Some(expires) = self.notice_expires_ms else {
+            return;
+        };
+        if now_ms >= expires {
+            self.notice = None;
+            self.notice_seen = None;
+            self.notice_expires_ms = None;
+        }
+    }
+
+    pub fn auto_next_in_ms(&self) -> Option<u64> {
+        if !self.config.auto_next {
+            return None;
+        }
+        let shown = self.results_shown_ms?;
+        Some(AUTO_NEXT_MS.saturating_sub(self.clock_ms.saturating_sub(shown)))
     }
 
     /// Which characters the host board can actually type, at the level each
@@ -640,21 +733,19 @@ impl App {
     /// A clamped load is reported here, once: the settings screen is exactly
     /// where the file and the trainer disagreeing matters.
     pub fn open_settings(&mut self) {
-        self.settings_backup = Some(self.config.clone());
         self.settings_row = 0;
         self.screen = Screen::Settings;
         self.notice = self.settings_adjusted.take();
     }
 
-    /// Leave the settings screen without saving: restore the opening snapshot.
-    pub fn discard_settings(&mut self, now_ms: u64) {
-        if let Some(config) = self.settings_backup.take() {
-            self.config = config;
-            if let Err(err) = self.rebuild(now_ms) {
-                self.notice = Some(format!("settings could not be restored: {err}"));
-            }
-        }
+    /// Leave the settings screen. Every edit took effect the moment it was
+    /// made, so leaving writes them out rather than cancelling them: there is
+    /// no half-applied state for a stray `esc` to fall back into.
+    pub fn leave_settings(&mut self, now_ms: u64) {
         self.screen = Screen::Typing;
+        if let Err(err) = self.save_settings(now_ms) {
+            self.notice = Some(format!("settings not saved: {err}"));
+        }
     }
 
     /// Write the edited settings to the config file, then read them back from
@@ -664,7 +755,6 @@ impl App {
         self.config.save(&path)?;
         let (config, adjusted) = Config::load_reporting(&path)?;
         self.config = config;
-        self.settings_backup = Some(self.config.clone());
         // A value the file could not keep in range is said, not silently fixed.
         let clamped = adjusted_notice(&adjusted).map(|notice| format!(" · {notice}"));
         match self.rebuild(now_ms) {
@@ -702,6 +792,7 @@ impl App {
             on_off(self.config.strict),
             self.config.lesson_words.to_string(),
             format!("{:.0}", self.config.target_wpm),
+            on_off(self.config.auto_next),
         ]
     }
 
@@ -723,12 +814,18 @@ impl App {
                 }
             }
             1 => {
-                let ids: Vec<String> = layouts::host_ids().iter().map(|id| (*id).to_string()).collect();
+                let ids: Vec<String> = layouts::host_ids()
+                    .iter()
+                    .map(|id| (*id).to_string())
+                    .collect();
                 let next = step_in(&ids, &self.config.host_layout, forward);
                 self.edit_config(now_ms, |config| config.host_layout = next);
             }
             2 => {
-                let langs: Vec<String> = corpora::languages().iter().map(|l| (*l).to_string()).collect();
+                let langs: Vec<String> = corpora::languages()
+                    .iter()
+                    .map(|l| (*l).to_string())
+                    .collect();
                 let next = step_in(&langs, &self.config.language, forward);
                 if let Err(err) = self.switch_language(&next, now_ms) {
                     self.notice = Some(err.to_string());
@@ -736,8 +833,15 @@ impl App {
             }
             3 => {
                 const MODES: [Mode; 3] = [Mode::Pseudo, Mode::Words, Mode::Sentences];
-                let at = MODES.iter().position(|mode| *mode == self.config.mode).unwrap_or(0);
-                let next = if forward { (at + 1) % MODES.len() } else { (at + 2) % MODES.len() };
+                let at = MODES
+                    .iter()
+                    .position(|mode| *mode == self.config.mode)
+                    .unwrap_or(0);
+                let next = if forward {
+                    (at + 1) % MODES.len()
+                } else {
+                    (at + 2) % MODES.len()
+                };
                 self.config.mode = MODES[next];
             }
             4 => {
@@ -748,39 +852,14 @@ impl App {
             }
             5 => self.config.strict = !self.config.strict,
             6 => {
-                self.config.lesson_words = step_in(&LESSON_WORDS, &self.config.lesson_words, forward);
+                self.config.lesson_words =
+                    step_in(&LESSON_WORDS, &self.config.lesson_words, forward);
             }
-            _ => {
+            7 => {
                 self.config.target_wpm = step_in(&TARGET_WPMS, &self.config.target_wpm, forward);
             }
+            _ => self.config.auto_next = !self.config.auto_next,
         }
-    }
-
-    /// Unlock the next letter of the teaching order on the user's say-so, past
-    /// the rule. The `u` binding the help screen advertises.
-    pub fn unlock_next(&mut self, now_ms: u64) {
-        let Some(ch) = self
-            .profile
-            .next_key(&self.layout, &self.config.language, &self.reachable_chars)
-        else {
-            self.notice = Some("every letter is unlocked".to_string());
-            return;
-        };
-        self.profile.unlock_manually(ch, now_ms);
-        self.notice = Some(match self.profile.save(&self.profile_path) {
-            Ok(()) => format!("unlocked {ch} (manual)"),
-            Err(err) => format!("unlocked {ch} (not saved: {err})"),
-        });
-    }
-
-    /// Pin the current unlocks by writing the profile now, so closing the
-    /// terminal mid-lesson cannot lose them. The `l` binding.
-    pub fn lock_current(&mut self) {
-        let count = self.profile.unlocked.len();
-        self.notice = Some(match self.profile.save(&self.profile_path) {
-            Ok(()) => format!("locked {count} keys"),
-            Err(err) => format!("profile not saved: {err}"),
-        });
     }
 
     /// Open the help screen, remembering where to return to.
@@ -836,6 +915,36 @@ impl App {
         }
     }
 
+    /// The numbers the idle screen shows, for the configured pair and mode.
+    ///
+    /// The dashboard's own filter is deliberately not used: the home panel is
+    /// about the drill the next keypress will start, not about whichever layout
+    /// the dashboard was last switched to.
+    pub fn home_summary(&self) -> HomeSummary {
+        let filter = Filter {
+            layout: Some(self.config.layout.clone()),
+            lang: Some(self.config.language.clone()),
+            mode: Some(self.config.mode),
+        };
+        let points = stats::series(&self.records, &filter);
+        let speed: Vec<f32> = points.iter().map(|point| point.wpm).collect();
+        HomeSummary {
+            tests: points.len(),
+            latest_wpm: speed.last().copied().unwrap_or(0.0),
+            best_wpm: stats::personal_best(&self.records, &filter),
+            consistency: stats::consistency(&speed),
+            weakest: stats::key_rows(
+                &self.records,
+                &filter,
+                HOME_KEY_WINDOW,
+                self.config.target_interval_ms(),
+            )
+            .into_iter()
+            .take(3)
+            .collect(),
+        }
+    }
+
     /// The three weakest keys of the last recorded lesson, weakest first.
     fn weakest_keys(&self) -> Vec<KeyRow> {
         let filter = Filter {
@@ -854,7 +963,11 @@ impl App {
     /// mentions, then "all layouts".
     pub fn layout_choices(&self) -> Vec<Option<String>> {
         let mut choices = vec![Some(self.config.layout.clone())];
-        choices.extend(self.seen("layout").filter(|id| *id != self.config.layout).map(Some));
+        choices.extend(
+            self.seen("layout")
+                .filter(|id| *id != self.config.layout)
+                .map(Some),
+        );
         choices.push(None);
         choices
     }
@@ -862,7 +975,11 @@ impl App {
     /// Every choice `l` cycles, the same way as [`App::layout_choices`].
     pub fn lang_choices(&self) -> Vec<Option<String>> {
         let mut choices = vec![Some(self.config.language.clone())];
-        choices.extend(self.seen("lang").filter(|id| *id != self.config.language).map(Some));
+        choices.extend(
+            self.seen("lang")
+                .filter(|id| *id != self.config.language)
+                .map(Some),
+        );
         choices.push(None);
         choices
     }
@@ -871,7 +988,11 @@ impl App {
     fn seen(&self, field: &str) -> impl Iterator<Item = String> + '_ {
         let mut seen: Vec<String> = Vec::new();
         for rec in &self.records {
-            let value = if field == "layout" { &rec.layout } else { &rec.lang };
+            let value = if field == "layout" {
+                &rec.layout
+            } else {
+                &rec.lang
+            };
             if !value.is_empty() && !seen.contains(value) {
                 seen.push(value.clone());
             }
@@ -885,7 +1006,7 @@ impl App {
     /// left arrow step it back.
     fn settings_key(&mut self, key: KeyEvent, now_ms: u64) -> Action {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.discard_settings(now_ms),
+            KeyCode::Esc | KeyCode::Char('q') => self.leave_settings(now_ms),
             KeyCode::Char('w') => {
                 if let Err(err) = self.save_settings(now_ms) {
                     self.notice = Some(format!("not saved: {err}"));
@@ -908,11 +1029,7 @@ impl App {
     fn help_key(&mut self, key: KeyEvent) -> Action {
         if matches!(
             key.code,
-            KeyCode::Esc
-                | KeyCode::Char('q')
-                | KeyCode::Char('?')
-                | KeyCode::Tab
-                | KeyCode::Enter
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::Tab | KeyCode::Enter
         ) {
             self.close_help();
         }
@@ -1062,9 +1179,7 @@ pub(crate) fn parse_rfc3339(ts: &str) -> Option<u64> {
     if bytes.len() < 20 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
         return None;
     }
-    let num = |from: usize, to: usize| -> Option<i64> {
-        ts.get(from..to)?.parse::<i64>().ok()
-    };
+    let num = |from: usize, to: usize| -> Option<i64> { ts.get(from..to)?.parse::<i64>().ok() };
     let (year, month, day) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
     let (hour, minute, second) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
@@ -1111,7 +1226,9 @@ fn backup_corrupt(path: &Path) -> io::Result<PathBuf> {
 fn note_text(note: Note) -> String {
     match note {
         Note::FallbackToPseudo => "too few usable words — drilling pseudo words".to_string(),
-        Note::FullAlphabetSentences => "too few usable sentences — every letter allowed".to_string(),
+        Note::FullAlphabetSentences => {
+            "too few usable sentences — every letter allowed".to_string()
+        }
         Note::SentencesDropped { dropped, total } => {
             format!("{dropped} of {total} sentences skipped: the unlocked keys cannot type them")
         }
@@ -1135,11 +1252,8 @@ mod tests {
     impl Scratch {
         fn new() -> Scratch {
             let id = NEXT.fetch_add(1, Ordering::Relaxed);
-            let base = std::env::temp_dir().join(format!(
-                "keytle-app-{}-{}",
-                std::process::id(),
-                id
-            ));
+            let base =
+                std::env::temp_dir().join(format!("keytle-app-{}-{}", std::process::id(), id));
             let _ = std::fs::remove_dir_all(&base);
             std::fs::create_dir_all(&base).unwrap();
             Scratch {
@@ -1233,13 +1347,25 @@ mod tests {
         // the test the results screen is showing.
         let path = scratch.paths.tests_file();
         let raw = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(raw.lines().count(), 1, "one finished lesson, one line:\n{raw}");
-        assert_eq!(raw.matches('\n').count(), 1, "the line ends with one newline");
+        assert_eq!(
+            raw.lines().count(),
+            1,
+            "one finished lesson, one line:\n{raw}"
+        );
+        assert_eq!(
+            raw.matches('\n').count(),
+            1,
+            "the line ends with one newline"
+        );
         let records = stats::read_all(&path).unwrap();
         assert_eq!(records.len(), 1);
         let record = &records[0];
         assert_eq!(record.v, keytle_core::stats::RECORD_VERSION);
-        assert!(parse_rfc3339(&record.ts).is_some(), "ts is RFC 3339: {}", record.ts);
+        assert!(
+            parse_rfc3339(&record.ts).is_some(),
+            "ts is RFC 3339: {}",
+            record.ts
+        );
         assert_eq!(record.layout, app.config.layout);
         assert_eq!(record.host, app.config.host_layout);
         assert_eq!(record.lang, app.config.language);
@@ -1247,7 +1373,10 @@ mod tests {
         assert!(record.wpm > 0.0 && record.duration_ms > 0);
         assert!(!record.keys.is_empty(), "per-key evidence is recorded");
         assert_eq!(record.unlocked_before, 4);
-        assert_eq!(record.unlocked_after, u32::try_from(app.profile.unlocked.len()).unwrap());
+        assert_eq!(
+            record.unlocked_after,
+            u32::try_from(app.profile.unlocked.len()).unwrap()
+        );
         assert_eq!(app.records.len(), 1, "the app remembers what it wrote");
     }
 
@@ -1292,15 +1421,24 @@ mod tests {
         };
         let mut app = App::new(bad, &scratch.paths, 0).unwrap();
         assert_eq!(app.config.target_wpm, keytle_core::config::MIN_TARGET_WPM);
-        assert_eq!(app.config.lesson_words, keytle_core::config::MIN_LESSON_WORDS);
+        assert_eq!(
+            app.config.lesson_words,
+            keytle_core::config::MIN_LESSON_WORDS
+        );
         assert!(app.config.target_interval_ms().is_finite());
         // And the lesson it generates is not empty.
         app.start_lesson(0);
         let text = app.lesson.as_ref().unwrap().text.clone();
-        assert!(!text.trim().is_empty(), "lesson {text:?} has nothing to type");
+        assert!(
+            !text.trim().is_empty(),
+            "lesson {text:?} has nothing to type"
+        );
         app.note_adjustments(&["lesson_words 0 → 1".to_string()]);
         app.open_settings();
-        assert_eq!(app.notice.as_deref(), Some("settings adjusted: lesson_words 0 → 1"));
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("settings adjusted: lesson_words 0 → 1")
+        );
     }
 
     #[test]
@@ -1359,19 +1497,213 @@ mod tests {
         assert_eq!(app.records.len(), 1, "the app keeps what it wrote itself");
     }
 
+    /// Finish one whole lesson and leave the app on its results screen.
+    fn finish_one_lesson(app: &mut App, now_ms: u64) {
+        app.config.emulate = false;
+        app.start_lesson(now_ms);
+        let text = app.lesson.as_ref().unwrap().text.clone();
+        for (i, ch) in text.chars().enumerate() {
+            let at = now_ms + 100 + i as u64;
+            if app.handle_key(key(KeyCode::Char(ch)), at) == Action::Finish {
+                app.finish_lesson(at);
+            }
+        }
+        assert_eq!(app.screen, Screen::Results);
+    }
+
     #[test]
-    fn esc_on_settings_discards_the_edits() {
+    fn a_results_screen_left_alone_starts_the_next_lesson() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        finish_one_lesson(&mut app, 0);
+        let shown = app.clock_ms;
+        assert_eq!(
+            app.tick(shown + AUTO_NEXT_MS - 1),
+            Action::Redraw,
+            "not yet"
+        );
+        assert_eq!(app.screen, Screen::Results);
+        assert_eq!(
+            app.auto_next_in_ms(),
+            Some(1),
+            "the screen counts the last millisecond down"
+        );
+        assert_eq!(app.tick(shown + AUTO_NEXT_MS), Action::StartLesson);
+        assert_eq!(app.screen, Screen::Typing, "the results gave way");
+        assert!(app.session.is_some(), "and a lesson is running");
+        assert_eq!(app.auto_next_in_ms(), None, "nothing left to count");
+    }
+
+    #[test]
+    fn a_key_on_the_results_screen_holds_the_next_lesson_back() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        finish_one_lesson(&mut app, 0);
+        let shown = app.clock_ms;
+        // Reading a result is not the same as being finished with it. A letter
+        // would start the next lesson (that is the point of the drill), so a
+        // non-letter key is what holds the countdown.
+        let resumed = shown + AUTO_NEXT_MS - 500;
+        app.handle_key(key(KeyCode::Left), resumed);
+        assert_eq!(app.screen, Screen::Results);
+        assert_eq!(
+            app.tick(shown + AUTO_NEXT_MS),
+            Action::Redraw,
+            "the clock restarted"
+        );
+        assert_eq!(app.screen, Screen::Results);
+        assert_eq!(app.tick(resumed + AUTO_NEXT_MS), Action::StartLesson);
+    }
+
+    #[test]
+    fn auto_next_off_leaves_the_results_up_indefinitely() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.config.auto_next = false;
+        finish_one_lesson(&mut app, 0);
+        assert_eq!(app.auto_next_in_ms(), None);
+        assert_eq!(app.tick(app.clock_ms + 10 * AUTO_NEXT_MS), Action::Redraw);
+        assert_eq!(app.screen, Screen::Results);
+    }
+
+    #[test]
+    fn a_letter_on_the_results_screen_starts_the_next_lesson_with_it() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        finish_one_lesson(&mut app, 0);
+        app.config.emulate = false;
+        // The next lesson is drawn from the same alphabet; any letter the
+        // profile allows is a legal first keystroke.
+        let first = app
+            .profile
+            .unlocked
+            .iter()
+            .copied()
+            .find(|ch| ch.is_alphabetic())
+            .unwrap();
+        app.handle_key(key(KeyCode::Char(first)), AUTO_NEXT_MS / 2);
+        assert_eq!(app.screen, Screen::Typing, "typing starts the next lesson");
+        assert!(app.session.is_some());
+        assert!(
+            app.stats().unwrap().duration_ms == 0,
+            "the keystroke was typed"
+        );
+    }
+
+    #[test]
+    fn the_settings_screen_has_a_row_for_every_setting_and_cycles_them() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.open_settings();
+        assert_eq!(app.settings_values().len(), SETTINGS_ROWS.len());
+        let before = app.config.auto_next;
+        app.settings_row = SETTINGS_ROWS.len() - 1;
+        app.settings_cycle(0, true);
+        assert_eq!(app.config.auto_next, !before, "the last row toggles");
+    }
+
+    #[test]
+    fn the_home_summary_reads_the_configured_pair_and_mode() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        assert_eq!(app.home_summary().tests, 0, "a fresh install has no tests");
+        finish_one_lesson(&mut app, 0);
+        let summary = app.home_summary();
+        assert_eq!(summary.tests, 1);
+        assert!(summary.latest_wpm > 0.0, "{summary:?}");
+        assert_eq!(summary.best_wpm, Some(summary.latest_wpm));
+        // The weakest keys name letters, never the space bar.
+        assert!(
+            summary.weakest.iter().all(|row| !row.ch.is_whitespace()),
+            "{:?}",
+            summary.weakest
+        );
+    }
+
+    #[test]
+    fn a_notice_clears_itself_after_three_seconds() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.notice = Some("saved".to_string());
+        app.tick(1_000);
+        assert!(app.notice.is_some(), "the first tick only starts the clock");
+        app.tick(1_000 + NOTICE_MS - 1);
+        assert!(app.notice.is_some(), "long enough to read");
+        app.tick(1_000 + NOTICE_MS);
+        assert_eq!(app.notice, None, "the hints get their line back");
+    }
+
+    #[test]
+    fn the_saved_settings_notice_is_not_a_permanent_banner() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.handle_key(key(KeyCode::Char(',')), 0);
+        app.handle_key(key(KeyCode::Esc), 0);
+        assert_eq!(app.screen, Screen::Typing);
+        assert!(
+            app.notice.as_deref().unwrap_or_default().contains("settings saved"),
+            "leaving says where it wrote: {:?}",
+            app.notice
+        );
+        let shown = app.clock_ms;
+        app.tick(shown); // the loop's next pass starts the countdown
+        assert!(app.notice.is_some());
+        app.tick(shown + NOTICE_MS);
+        assert_eq!(app.notice, None, "the key hints are visible again");
+    }
+
+    #[test]
+    fn esc_on_settings_keeps_the_edits_and_writes_them() {
         let scratch = Scratch::new();
         let mut app = app(&scratch);
         let before = app.config.clone();
         app.open_settings();
         app.settings_move(6);
         app.settings_cycle(0, true);
-        assert_ne!(app.config.lesson_words, before.lesson_words);
+        let edited = app.config.clone();
+        assert_ne!(edited.lesson_words, before.lesson_words);
         app.handle_key(key(KeyCode::Esc), 0);
         assert_eq!(app.screen, Screen::Typing);
-        assert_eq!(app.config, before, "esc leaves without saving");
-        assert!(!scratch.paths.config_file().is_file(), "nothing was written");
+        assert_eq!(
+            app.config, edited,
+            "esc leaves with the edits, not against them"
+        );
+        assert_eq!(
+            Config::load(&scratch.paths.config_file()).unwrap(),
+            edited,
+            "and the next start loads exactly what the screen showed"
+        );
+    }
+
+    #[test]
+    fn the_emulate_row_reaches_the_typing_and_survives_a_restart() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        assert_eq!(
+            app.emulator.translate('e'),
+            Some('f'),
+            "qwerty e is colemak f"
+        );
+        app.handle_key(key(KeyCode::Char(',')), 0);
+        for _ in 0..4 {
+            app.handle_key(key(KeyCode::Char('j')), 0);
+        }
+        app.handle_key(key(KeyCode::Char(' ')), 0);
+        assert!(
+            !app.config.emulate,
+            "space toggled the row under the cursor"
+        );
+        app.handle_key(key(KeyCode::Esc), 0);
+        assert!(!app.config.emulate, "leaving kept it, it was not reverted");
+
+        // A fresh launch, as the next start would be, types e as e.
+        let saved = Config::load(&scratch.paths.config_file()).unwrap();
+        assert!(!saved.emulate, "the file kept it: {:?}", saved.emulate);
+        let mut app = App::new(saved, &scratch.paths, 0).unwrap();
+        app.start_lesson(0);
+        app.session = Some(TypingSession::new("e", app.config.strict, 0));
+        let action = app.handle_key(key(KeyCode::Char('e')), 100);
+        assert_eq!(action, Action::Finish, "with emulation off, e is e");
     }
 
     #[test]
@@ -1392,11 +1724,11 @@ mod tests {
         }
         assert_eq!(app.settings_row(), 0, "the cursor wrapped back to the top");
         app.handle_key(key(KeyCode::Esc), 0);
-        assert_eq!(app.config.layout, first, "esc put the layout back");
+        assert_eq!(app.config.layout, first, "the layout stayed where h put it");
     }
 
     #[test]
-    fn w_saves_from_the_settings_screen_and_esc_then_leaves_the_file_alone() {
+    fn w_saves_mid_screen_and_leaving_saves_the_rest() {
         let scratch = Scratch::new();
         let mut app = app(&scratch);
         app.handle_key(key(KeyCode::Char(',')), 0);
@@ -1414,12 +1746,15 @@ mod tests {
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.contains("lesson_words = 30"), "{saved}");
 
-        // Editing after the save and leaving with esc must not touch the file.
+        // Editing after the save and leaving with esc writes the rest, so the
+        // file never lags behind the screen and a stray esc cannot revert.
         app.handle_key(key(KeyCode::Char(' ')), 0);
         assert_eq!(app.config.lesson_words, 40);
         app.handle_key(key(KeyCode::Esc), 0);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved, "esc wrote nothing");
-        assert_eq!(Config::load(&path).unwrap().lesson_words, 30);
+        assert_eq!(app.screen, Screen::Typing);
+        let last = std::fs::read_to_string(&path).unwrap();
+        assert_ne!(last, saved, "esc wrote the later edit too: {last}");
+        assert_eq!(Config::load(&path).unwrap().lesson_words, 40);
     }
 
     #[test]
@@ -1444,11 +1779,20 @@ mod tests {
         assert_eq!(app.profile.lang, "fr");
         assert_eq!(app.profile.tests_completed, 0, "no tests carried over");
         let fresh = Profile::new(&app.layout, "fr", 0);
-        assert_eq!(app.profile.unlocked, fresh.unlocked, "bepo.fr's own alphabet");
-        assert!(!app.profile.unlocked.contains(&'z'), "colemak's unlock stayed behind");
-        let colemak: BTreeSet<char> = [Profile::load(&scratch.paths.profile_file("colemak-dh", "fr"))
-            .unwrap()
-            .unlocked]
+        assert_eq!(
+            app.profile.unlocked, fresh.unlocked,
+            "bepo.fr's own alphabet"
+        );
+        assert!(
+            !app.profile.unlocked.contains(&'z'),
+            "colemak's unlock stayed behind"
+        );
+        let colemak: BTreeSet<char> =
+            [
+                Profile::load(&scratch.paths.profile_file("colemak-dh", "fr"))
+                    .unwrap()
+                    .unlocked,
+            ]
             .into_iter()
             .flatten()
             .collect();
@@ -1491,18 +1835,31 @@ mod tests {
     }
 
     #[test]
-    fn u_unlocks_the_next_key_and_l_saves_the_profile() {
+    fn no_key_can_unlock_or_pin_a_letter_by_hand() {
         let scratch = Scratch::new();
         let mut app = app(&scratch);
-        let before = app.profile.unlocked.len();
+        let before = app.profile.unlocked.clone();
+        // `u` and `l` used to unlock and pin. Now they are just letters: on the
+        // idle screen they start a lesson like any other character, and they
+        // unlock nothing outside the rule.
         app.handle_key(key(KeyCode::Char('u')), 0);
-        assert_eq!(app.profile.unlocked.len(), before + 1);
-        assert!(app.notice.as_deref().unwrap().contains("unlocked"));
-        app.handle_key(key(KeyCode::Char('l')), 0);
-        assert!(app.notice.as_deref().unwrap().contains("locked"));
-        let saved = Profile::load(&scratch.paths.profile_file(&app.config.layout, &app.config.language))
-            .expect("the profile was written");
-        assert_eq!(saved.unlocked.len(), before + 1);
+        app.handle_key(key(KeyCode::Char('l')), 10);
+        assert!(app.session.is_some(), "they are letters, and letters type");
+        assert_eq!(app.profile.unlocked, before, "unlocks are the rule's alone");
+        assert!(
+            !app.notice.as_deref().unwrap_or("").contains("unlocked"),
+            "no notice claims an unlock: {:?}",
+            app.notice
+        );
+        // Nor can the profile be moved out of step from outside: the file still
+        // holds what the engine decided at start-up.
+        let saved = Profile::load(
+            &scratch
+                .paths
+                .profile_file(&app.config.layout, &app.config.language),
+        )
+        .expect("the profile was written at start-up");
+        assert_eq!(saved.unlocked, before);
     }
 
     #[test]
@@ -1516,7 +1873,10 @@ mod tests {
         // qwerty board has no altgr level — so no keystroke can ever produce them.
         let mut app = App::new(config, &scratch.paths, 0).unwrap();
         assert!(app.layout.contains_char('é'), "colemak-dh carries é");
-        assert!(!app.emulator.is_char_reachable('é'), "but the host cannot type it");
+        assert!(
+            !app.emulator.is_char_reachable('é'),
+            "but the host cannot type it"
+        );
         assert!(
             !app.reachable_chars.contains(&'é'),
             "so it is not in the practice alphabet"
@@ -1552,7 +1912,10 @@ mod tests {
 
         let app = App::new(Config::default(), &scratch.paths, 0).unwrap();
 
-        assert_eq!(app.notice, None, "a missing profile is a first run, not a loss");
+        assert_eq!(
+            app.notice, None,
+            "a missing profile is a first run, not a loss"
+        );
         assert!(path.is_file(), "the fresh profile is still written back");
         let mut name = path.as_os_str().to_owned();
         name.push(".corrupt");
@@ -1600,7 +1963,10 @@ mod tests {
         let session = app.session.as_ref().unwrap();
         let stats = session.stats();
         assert!(
-            stats.per_key.values().all(|agg| agg.misses == 0 && agg.hits == 0),
+            stats
+                .per_key
+                .values()
+                .all(|agg| agg.misses == 0 && agg.hits == 0),
             "nothing was charged against the alphabet"
         );
     }
@@ -1642,7 +2008,10 @@ mod tests {
             ..Config::default()
         };
         let app = App::new(config, &scratch.paths, 0).unwrap();
-        assert_eq!(app.layout.id, "scratch-qwerty", "the app runs the user board");
+        assert_eq!(
+            app.layout.id, "scratch-qwerty",
+            "the app runs the user board"
+        );
         let ids = layouts::available(&app.paths.layouts_dir());
         assert!(ids.iter().any(|id| id == "scratch-qwerty"), "{ids:?}");
     }

@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use crossterm::cursor;
 use crossterm::event::{self, Event, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use crossterm::cursor;
 use keytle_core::config::{Config, Mode};
 use keytle_core::emulate::Emulator;
 use keytle_core::paths::{self, Paths};
@@ -186,6 +186,9 @@ fn event_loop(
     loop {
         terminal.draw(|frame| ui::draw(frame, app))?;
         if !event::poll(Duration::from_millis(16))? {
+            // No key: a results screen left alone starts the next lesson
+            // itself, and the next frame draws it.
+            app.tick(now_ms());
             continue;
         }
         match event::read()? {
@@ -283,19 +286,16 @@ fn stats_command(
     mode: Option<&str>,
     last: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mode = match mode {
-        Some(text) => Some(parse_mode(text).ok_or_else(|| {
-            format!("unknown mode \"{text}\": try pseudo, words or sentences")
-        })?),
-        None => None,
-    };
+    let mode =
+        match mode {
+            Some(text) => Some(parse_mode(text).ok_or_else(|| {
+                format!("unknown mode \"{text}\": try pseudo, words or sentences")
+            })?),
+            None => None,
+        };
     let dirs = paths::paths();
     let records = stats::read_all(&dirs.tests_file())?;
-    let filter = Filter {
-        layout,
-        lang,
-        mode,
-    };
+    let filter = Filter { layout, lang, mode };
     if !records.iter().any(|rec| filter.matches(rec)) {
         println!("{}", empty_history_line(&filter, records.len()));
         return Ok(());
@@ -314,7 +314,11 @@ fn stats_command(
     let keys = stats::key_rows(&records, &filter, window, config.target_interval_ms());
 
     println!("{:<12} {}", "tests", points.len());
-    println!("{:<12} {:.0}", "latest wpm", speed.last().copied().unwrap_or(0.0));
+    println!(
+        "{:<12} {:.0}",
+        "latest wpm",
+        speed.last().copied().unwrap_or(0.0)
+    );
     println!("{:<12} {best:.0}", "best wpm");
     println!(
         "{:<12} {:.1}%  (last {})",
@@ -431,7 +435,11 @@ fn reachability(config: &Config, layout_dir: &Path) -> String {
     // The characters are named, and the reason is stated: a shared board shape
     // is not enough, because a legend the host has no level for can never be
     // typed — Colemak-DH's altgr `é` on a qwerty host is the usual case.
-    let chars: String = unreachable.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
+    let chars: String = unreachable
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
         "reachability: {} -> {}: {} unreachable character{} ({chars}) — no host keystroke produces them at their level, so lessons skip them",
         config.host_layout,
@@ -492,7 +500,13 @@ mod tests {
 
     #[test]
     fn doctor_report_names_version_paths_and_term() {
-        let out = render(&dirs(), &Config::default(), "0.1.0", Some("xterm-kitty"), "reachability: test line");
+        let out = render(
+            &dirs(),
+            &Config::default(),
+            "0.1.0",
+            Some("xterm-kitty"),
+            "reachability: test line",
+        );
         assert!(out.contains("keytle 0.1.0"), "{out}");
         assert!(out.contains("/cfg/keytle"), "{out}");
         assert!(out.contains("/data/keytle"), "{out}");
@@ -505,7 +519,13 @@ mod tests {
 
     #[test]
     fn doctor_report_marks_a_missing_term() {
-        let out = render(&dirs(), &Config::default(), "0.1.0", None, "reachability: test line");
+        let out = render(
+            &dirs(),
+            &Config::default(),
+            "0.1.0",
+            None,
+            "reachability: test line",
+        );
         assert!(out.contains("TERM:        (unset)"), "{out}");
     }
 
@@ -522,7 +542,10 @@ mod tests {
         let line = reachability(&config, &empty_layout_dir());
         assert!(line.contains("reachability:"), "{line}");
         assert!(line.contains("unreachable character"), "{line}");
-        assert!(line.contains("no host keystroke produces them"), "the reason is given: {line}");
+        assert!(
+            line.contains("no host keystroke produces them"),
+            "the reason is given: {line}"
+        );
         assert!(line.contains('h'), "the characters are named: {line}");
         assert!(line.contains('é'), "a level gap is named too: {line}");
 
@@ -545,7 +568,8 @@ mod tests {
             ..Config::default()
         };
         assert!(
-            reachability(&identity, &empty_layout_dir()).contains("every target character is reachable"),
+            reachability(&identity, &empty_layout_dir())
+                .contains("every target character is reachable"),
             "an identical host reaches every character"
         );
     }
@@ -575,7 +599,13 @@ mod tests {
             target_wpm: 60.0,
             ..Config::default()
         };
-        let out = render(&dirs(), &config, "0.1.0", Some("xterm-kitty"), "reachability: test line");
+        let out = render(
+            &dirs(),
+            &config,
+            "0.1.0",
+            Some("xterm-kitty"),
+            "reachability: test line",
+        );
         assert!(out.contains("config:\n  layout = \"workman\"\n"), "{out}");
         assert!(out.contains("  mode = \"words\"\n"), "{out}");
         assert!(out.contains("  target_wpm = 60\n"), "{out}");
@@ -584,10 +614,7 @@ mod tests {
 
     /// A throwaway config/data root, so `App::new` never touches the real ones.
     fn scratch(tag: &str) -> (PathBuf, Paths) {
-        let base = std::env::temp_dir().join(format!(
-            "keytle-main-{}-{tag}",
-            std::process::id()
-        ));
+        let base = std::env::temp_dir().join(format!("keytle-main-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let paths = Paths {
@@ -637,7 +664,10 @@ mod tests {
         assert_eq!(app.screen, Screen::Results);
         assert_eq!(app.profile.tests_completed, 1, "the lesson was recorded");
         let drawn = screen(&terminal);
-        assert!(drawn.contains("results"), "the loop redrew as results:\n{drawn}");
+        assert!(
+            drawn.contains("results"),
+            "the loop redrew as results:\n{drawn}"
+        );
         assert!(drawn.contains("accuracy"), "{drawn}");
         let _ = std::fs::remove_dir_all(base);
     }

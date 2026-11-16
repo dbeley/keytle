@@ -45,8 +45,12 @@ const PUNCTUATION: &[char] = &['\'', ',', '.', ';', ':', '!', '?'];
 /// The rung after the punctuation for French: its accented letters.
 const FRENCH_EXTRAS: &[char] = &['é', 'à', 'è', 'ç', 'ù', 'ê', 'î', 'ô', 'û'];
 
-/// How an unlock came about. `Auto` is the rule below; `Manual` and `Lock` exist
-/// for the UI's "unlock this anyway" and "pin this set" escape hatches.
+/// How an unlock came about.
+///
+/// Every unlock the trainer makes is [`UnlockHow::Auto`]: there is no manual
+/// route through the rule. The other two variants are kept so a profile written
+/// by an older build (which had `u` unlock and `l` pin bindings) still reads;
+/// nothing writes them any more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnlockHow {
     Auto,
@@ -231,22 +235,6 @@ impl Profile {
         Some(event)
     }
 
-    /// Unlock `ch` because the user asked for it, not because the rule said so.
-    /// The event is recorded as [`UnlockHow::Manual`] so a profile can tell the
-    /// two apart later; the session budget is charged exactly as an automatic
-    /// unlock would charge it.
-    pub fn unlock_manually(&mut self, ch: char, now_ms: u64) -> UnlockEvent {
-        self.unlocked.insert(ch);
-        self.unlocks_this_session = self.unlocks_this_session.saturating_add(1);
-        let event = UnlockEvent {
-            ch,
-            ts_ms: now_ms,
-            how: UnlockHow::Manual,
-        };
-        self.last_unlock = Some(event);
-        event
-    }
-
     /// Fold one finished lesson's per-key totals into the profile.
     ///
     /// A session's mean interval is replayed once per hit, so a long session
@@ -287,7 +275,12 @@ impl Profile {
     /// is unlocked the rung after them is the punctuation prose needs, then the
     /// accented letters French needs; a character the layout has no key for, or
     /// the host keyboard cannot press, is skipped rather than blocking the rung.
-    pub fn next_key(&self, layout: &Layout, lang: &str, reachable: &BTreeSet<char>) -> Option<char> {
+    pub fn next_key(
+        &self,
+        layout: &Layout,
+        lang: &str,
+        reachable: &BTreeSet<char>,
+    ) -> Option<char> {
         if let Some(ch) = layout
             .unlock_order_for(lang)
             .into_iter()
@@ -296,13 +289,9 @@ impl Profile {
             return Some(ch);
         }
         let extras: &[char] = if lang == "fr" { FRENCH_EXTRAS } else { &[] };
-        PUNCTUATION
-            .iter()
-            .chain(extras.iter())
-            .copied()
-            .find(|ch| {
-                !self.unlocked.contains(ch) && reachable.contains(ch) && layout.contains_char(*ch)
-            })
+        PUNCTUATION.iter().chain(extras.iter()).copied().find(|ch| {
+            !self.unlocked.contains(ch) && reachable.contains(ch) && layout.contains_char(*ch)
+        })
     }
 }
 
@@ -595,7 +584,11 @@ mod tests {
         assert_eq!(set.len(), 8, "the bundled order is letters only");
         let mut profile = profile_with(&set.iter().collect::<String>());
         profile.unlocked = set.iter().copied().collect();
-        let reachable: BTreeSet<char> = set.iter().copied().chain(PUNCTUATION.iter().copied()).collect();
+        let reachable: BTreeSet<char> = set
+            .iter()
+            .copied()
+            .chain(PUNCTUATION.iter().copied())
+            .collect();
 
         assert_eq!(
             profile.verdict(&layout, "en", &reachable, TARGET),
