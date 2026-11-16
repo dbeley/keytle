@@ -1,6 +1,6 @@
 //! The live typing view: speed, accuracy, the text, and the board.
 //!
-//! The view is a pure function of [`App`] — it reads the current session's
+//! The view is a pure function of [`App`] - it reads the current session's
 //! cursor and totals and draws them. Every region is derived from the frame
 //! area through ratatui constraints, so nothing is indexed by hand and a resize
 //! cannot panic.
@@ -8,7 +8,7 @@
 //! The layout gives the text the upper half of the screen and docks the board
 //! to the bottom: a lesson is read and typed at, so it is centred both ways in
 //! the space above the keyboard rather than pinned to the top-left corner. When
-//! no lesson runs the same space holds the home panel — where the drill stands
+//! no lesson runs the same space holds the home panel - where the drill stands
 //! and which keys open the dashboard, the settings and the help.
 
 use keytle_core::typing::SessionStats;
@@ -77,24 +77,24 @@ fn render_view(frame: &mut Frame, app: &App, show_home: bool) {
 /// What is being taught, and under which rules.
 fn title_line(app: &App) -> Line<'static> {
     let mode = app.config.mode.to_string();
-    let mut flags = Vec::new();
+    let mut flags: Vec<String> = Vec::new();
     if app.config.strict {
-        flags.push("strict");
+        flags.push("strict".to_string());
     }
-    if app.config.emulate {
-        flags.push("emulating");
-    }
-    let flags = if flags.is_empty() {
-        String::new()
+    // The bar says which way round it is, not just when it is emulated: "native"
+    // and "emulating on qwerty" are different drills, and a missing flag is not
+    // the same statement as "off".
+    flags.push(if app.config.emulate {
+        format!("emulating on {}", app.config.host_layout)
     } else {
-        format!(" · {}", flags.join(" · "))
-    };
+        "native".to_string()
+    });
     Line::from(vec![
         Span::styled(
-            format!("keytle — {}", app.layout.name),
+            format!("keytle - {}", app.layout.name),
             Style::new().add_modifier(Modifier::BOLD).fg(Color::Cyan),
         ),
-        Span::styled(format!("  {mode}{flags}"), dim()),
+        Span::styled(format!("  {mode} · {}", flags.join(" · ")), dim()),
     ])
 }
 
@@ -201,7 +201,7 @@ fn render_home(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines = Vec::new();
     if summary.tests == 0 {
         lines.push(Line::from(Span::styled(
-            "no tests yet — this is where they add up",
+            "no tests yet - this is where they add up",
             Style::new().fg(Color::DarkGray),
         )));
     } else {
@@ -224,13 +224,13 @@ fn render_home(frame: &mut Frame, area: Rect, app: &App) {
                 summary
                     .best_wpm
                     .map(|wpm| format!("{wpm:.0} wpm"))
-                    .unwrap_or_else(|| "—".to_string()),
+                    .unwrap_or_else(|| "-".to_string()),
                 summary.consistency
             ),
             plain(),
         )));
         let weak = if summary.weakest.is_empty() {
-            "—".to_string()
+            "-".to_string()
         } else {
             summary
                 .weakest
@@ -434,7 +434,7 @@ mod tests {
             screen.contains(&first_word),
             "expected {first_word:?} in:\n{screen}"
         );
-        assert!(screen.contains("keytle —"), "{screen}");
+        assert!(screen.contains("keytle -"), "{screen}");
         assert!(screen.contains("wpm"), "{screen}");
         assert!(screen.contains('%'), "{screen}");
     }
@@ -484,7 +484,7 @@ mod tests {
         assert!(screen.contains("terminal too small"), "{screen}");
         assert!(screen.contains("80"), "{screen}");
         assert!(
-            !screen.contains("keytle —"),
+            !screen.contains("keytle -"),
             "nothing else is drawn: {screen}"
         );
     }
@@ -549,7 +549,7 @@ mod tests {
     fn the_shortcuts_survive_a_home_panel_full_of_history() {
         // A finished test adds three rows to the panel. The panel used to size
         // itself from the number of `Line`s, so the summary line that wrapped
-        // pushed the shortcut row off the bottom — on a terminal that is
+        // pushed the shortcut row off the bottom - on a terminal that is
         // otherwise perfectly adequate.
         let (_scratch, mut app) = app();
         app.config.emulate = false;
