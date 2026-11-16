@@ -21,8 +21,8 @@ use keytle_core::corpora;
 use keytle_core::corpus::{Corpus, CorpusError};
 use keytle_core::emulate::Emulator;
 use keytle_core::engine::generate::{generate, Lesson, Note};
-use keytle_core::engine::profile::{Profile, Verdict};
-use keytle_core::layout::{Layout, LayoutError, Position};
+use keytle_core::engine::profile::{Profile, ProfileError, Verdict};
+use keytle_core::layout::{Layout, LayoutError};
 use keytle_core::layouts;
 use keytle_core::paths::Paths;
 use keytle_core::stats::{self, Filter, KeyRow, TestRecord};
@@ -182,9 +182,8 @@ pub struct App {
     pub last_unlock: Option<UnlockOutcome>,
     /// What the stats dashboard is currently filtered to.
     pub stats: StatsFilter,
-    /// Target positions the host board can actually press.
-    reachable_positions: BTreeSet<Position>,
-    /// Target characters the host board can actually produce.
+    /// Target characters the host board can actually produce: the practice
+    /// alphabet, and the set the board dims keys from.
     reachable_chars: BTreeSet<char>,
     profile_path: PathBuf,
     tests_path: PathBuf,
@@ -238,7 +237,6 @@ impl App {
         // A fresh profile stands in until `load_profile` below reads the file;
         // on first run it is the one that gets saved.
         let profile = Profile::new(&layout, &config.language, now_ms);
-        let reachable_positions = positions_reachable(&layout, &host, config.emulate);
         let reachable_chars = chars_reachable(&layout, &emulator, config.emulate);
         let tests_path = paths.tests_file();
         // An unreadable or corrupted history must not stop the trainer from
@@ -268,7 +266,6 @@ impl App {
             lesson_started_ms: now_ms,
             last_stats: None,
             last_miss: None,
-            reachable_positions,
             reachable_chars,
             profile_path,
             tests_path,
@@ -563,10 +560,10 @@ impl App {
         Ok(())
     }
 
-    /// Which target positions, and therefore characters, the host board can type.
+    /// Which characters the host board can actually type, at the level each
+    /// one sits at. This is the practice alphabet and what the board may draw
+    /// as typable, so a key the host cannot produce never looks available.
     fn refresh_reachability(&mut self) {
-        self.reachable_positions =
-            positions_reachable(&self.layout, &self.host, self.config.emulate);
         self.reachable_chars = chars_reachable(&self.layout, &self.emulator, self.config.emulate);
     }
 
@@ -579,24 +576,34 @@ impl App {
         self.profile = match Profile::load(&path) {
             Ok(profile) => profile,
             Err(err) => {
-                // A missing file is simply a first run. An unreadable one is not:
-                // it held the learner's progress, and the fresh profile saved
-                // below overwrites it, so a copy is kept and the loss is said
-                // out loud instead of being swallowed.
-                let backup = path.exists().then(|| backup_corrupt(&path));
+                // A missing file is simply a first run: there is nothing to lose
+                // and nothing to say. An unreadable or corrupt one is not — it
+                // held the learner's progress, and the fresh profile saved below
+                // overwrites it, so a copy is kept and the loss is said out loud
+                // instead of being swallowed.
+                let first_run = matches!(
+                    &err,
+                    ProfileError::Read { source, .. }
+                        if source.kind() == io::ErrorKind::NotFound
+                );
+                let backup = (!first_run && path.exists()).then(|| backup_corrupt(&path));
                 let profile = Profile::new(&self.layout, &self.config.language, now_ms);
                 let saved = profile.save(&path);
-                self.notice = Some(match (backup, saved) {
-                    (Some(Ok(copy)), _) => format!(
+                self.notice = match (first_run, backup, saved) {
+                    (true, _, Ok(())) => None,
+                    (true, _, Err(save_err)) => {
+                        Some(format!("profile not saved: {save_err}"))
+                    }
+                    (false, Some(Ok(copy)), _) => Some(format!(
                         "profile could not be read ({err}) — kept a copy at {} and started fresh",
                         copy.display()
-                    ),
-                    (Some(Err(copy_err)), _) => format!(
+                    )),
+                    (false, Some(Err(copy_err)), _) => Some(format!(
                         "profile could not be read ({err}) — could not back it up ({copy_err}) — started fresh"
-                    ),
-                    (None, Ok(())) => err.to_string(),
-                    (None, Err(save_err)) => format!("{err} · not saved: {save_err}"),
-                });
+                    )),
+                    (false, None, Ok(())) => Some(err.to_string()),
+                    (false, None, Err(save_err)) => Some(format!("{err} · not saved: {save_err}")),
+                };
                 profile
             }
         };
@@ -960,10 +967,10 @@ impl App {
         self.config.emulate.then_some(&self.emulator)
     }
 
-    /// The target positions the host board can reach; everything else is drawn
-    /// as unreachable.
-    pub fn reachable_positions(&self) -> &BTreeSet<Position> {
-        &self.reachable_positions
+    /// The characters a keystroke can actually produce; everything else is
+    /// drawn as unreachable.
+    pub fn reachable_chars(&self) -> &BTreeSet<char> {
+        &self.reachable_chars
     }
 }
 
@@ -1060,16 +1067,6 @@ pub(crate) fn parse_rfc3339(ts: &str) -> Option<u64> {
     let days = days_from_civil(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?);
     let secs = days * 86_400 + hour * 3600 + minute * 60 + second;
     Some(u64::try_from(secs.max(0) * 1000).unwrap_or(0))
-}
-
-/// Which target positions the host board also has a key for.
-fn positions_reachable(layout: &Layout, host: &Layout, emulate: bool) -> BTreeSet<Position> {
-    layout
-        .keys
-        .keys()
-        .filter(|pos| !emulate || host.key_at(**pos).is_some())
-        .copied()
-        .collect()
 }
 
 /// The alphabet a lesson may use: every character a keystroke can actually
@@ -1539,6 +1536,21 @@ mod tests {
         let outcome = app.unlock_outcome();
         assert_ne!(outcome.next, Some('é'), "é must never be the next key");
         assert!(outcome.next.is_none(), "got {:?}", outcome.next);
+    }
+
+    #[test]
+    fn a_first_run_with_no_profile_says_nothing() {
+        let scratch = Scratch::new();
+        let path = scratch.paths.profile_file("colemak-dh", "en");
+        assert!(!path.exists(), "a clean data dir has no profile");
+
+        let app = App::new(Config::default(), &scratch.paths, 0).unwrap();
+
+        assert_eq!(app.notice, None, "a missing profile is a first run, not a loss");
+        assert!(path.is_file(), "the fresh profile is still written back");
+        let mut name = path.as_os_str().to_owned();
+        name.push(".corrupt");
+        assert!(!PathBuf::from(name).exists(), "and nothing is backed up");
     }
 
     #[test]

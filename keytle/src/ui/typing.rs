@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         &app.layout,
         app.expected(),
         app.legend(),
-        app.reachable_positions(),
+        app.reachable_chars(),
     );
     frame.render_widget(Paragraph::new(notice_line(app)), chunks[4]);
 }

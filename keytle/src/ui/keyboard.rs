@@ -5,8 +5,8 @@
 //! key is a cell [`KEY_WIDTH`] wide and either two or three rows tall: the third
 //! row exists only when the layout has altgr legends, so the altgr character can
 //! sit above its base (`é` over `e`) and the host legend, when emulating, below
-//! it. A position the host board cannot press at all is drawn as `·`, which is
-//! the honest thing to show for a key that will never produce a keystroke.
+//! it. A legend the host board cannot produce at its level is drawn as `·`,
+//! which is the honest thing to show for a key that will never deliver it.
 
 use std::collections::BTreeSet;
 
@@ -22,6 +22,8 @@ use unicode_width::UnicodeWidthChar;
 pub const KEY_WIDTH: u16 = 4;
 /// The number row and the three letter rows; the space row is not drawn.
 const ROWS_SHOWN: u8 = 4;
+/// What a legend the host cannot produce looks like.
+const UNREACHABLE: &str = "·";
 
 /// The style that marks the next expected key. A test can count the cells using
 /// it, which is how "exactly one key is highlighted" is enforced.
@@ -76,15 +78,16 @@ pub fn key_rects(layout: &Layout, area: Rect) -> Vec<(Position, Rect)> {
 }
 
 /// Draw the board. `next` is the character the typist must produce, `emulator`
-/// is present only when emulation is on, and `reachable` names the positions the
-/// host board can press.
+/// is present only when emulation is on, and `reachable` is the level-aware set
+/// of characters a keystroke can actually produce — the same alphabet lessons
+/// are drawn from, so a key the host cannot deliver never looks typable.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     layout: &Layout,
     next: Option<char>,
     emulator: Option<&Emulator>,
-    reachable: &BTreeSet<Position>,
+    reachable: &BTreeSet<char>,
 ) {
     let next_pos = next.and_then(|want| {
         layout
@@ -108,13 +111,21 @@ pub fn render(
         if highlighted {
             fill(buf, rect, next_key_style());
         }
-        if !reachable.contains(&pos) {
-            put_center(buf, rect, base_row(rect, altgr_row), "·", dim());
+        if !reachable.contains(&key.base) {
+            put_center(buf, rect, base_row(rect, altgr_row), UNREACHABLE, dim());
             continue;
         }
         if altgr_row {
             if let Some(altgr) = key.altgr {
-                put_center(buf, rect, rect.y, &altgr.to_string(), dim());
+                // The altgr level is a level of its own: an `é` the host has no
+                // altgr legend for is not typeable just because the base is, so
+                // it is marked out of reach rather than offered silently.
+                let legend = if reachable.contains(&altgr) {
+                    altgr.to_string()
+                } else {
+                    UNREACHABLE.to_string()
+                };
+                put_center(buf, rect, rect.y, &legend, dim());
             }
         }
         put_center(
@@ -212,16 +223,22 @@ mod tests {
         layouts::load(id, Path::new("/nonexistent")).unwrap()
     }
 
-    fn reachable_all(layout: &Layout) -> BTreeSet<Position> {
-        layout.keys.keys().copied().collect()
+    /// Every legend of the layout, which is what a non-emulated board can type.
+    fn all_chars(layout: &Layout) -> BTreeSet<char> {
+        layout
+            .keys
+            .values()
+            .flat_map(|key| [Some(key.base), key.shift, key.altgr])
+            .flatten()
+            .collect()
     }
 
     fn draw(id: &str, next: Option<char>, emulator: Option<&Emulator>, width: u16) -> Terminal<TestBackend> {
         let layout = layout(id);
         let area = Rect::new(0, 0, width, board_height(&layout) + 2);
         let reachable = match emulator {
-            Some(em) => em.reachable().clone(),
-            None => reachable_all(&layout),
+            Some(em) => em.reachable_chars(),
+            None => all_chars(&layout),
         };
         let mut terminal = Terminal::new(TestBackend::new(width, area.height)).unwrap();
         terminal
@@ -320,19 +337,18 @@ mod tests {
             .map(|(_, rect)| *rect)
             .expect("colemak-dh has an e key");
         let text = cell_text(&terminal, e_rect);
-        assert!(text.contains('é'), "the altgr legend is drawn above e: {text:?}");
         assert!(text.contains('e'), "the base legend is drawn: {text:?}");
         assert!(text.contains('k'), "qwerty's k subscript sits below: {text:?}");
     }
 
     #[test]
     fn unreachable_positions_render_as_dots() {
-        // A position the host board cannot press has to be visibly out of reach
-        // rather than silently pretending to be typeable.
+        // A key whose character the host cannot produce has to be visibly out of
+        // reach rather than silently pretending to be typeable.
         let layout = layout("colemak-dh");
         let area = Rect::new(0, 0, 80, board_height(&layout));
-        let mut reachable = reachable_all(&layout);
-        reachable.remove(&Position::new(2, 6)); // the n key
+        let mut reachable = all_chars(&layout);
+        reachable.remove(&'n');
         let mut terminal = Terminal::new(TestBackend::new(80, area.height)).unwrap();
         terminal
             .draw(|frame| render(frame, area, &layout, None, None, &reachable))
@@ -345,6 +361,34 @@ mod tests {
             .map(|(_, rect)| rect)
             .unwrap();
         assert_eq!(cell_text(&terminal, rect).trim(), "·");
+    }
+
+    #[test]
+    fn an_altgr_legend_the_host_cannot_type_is_a_dot() {
+        // qwerty has no altgr level, so colemak-dh's `é` can never be typed on
+        // it: drawing it as an ordinary legend would offer a key that produces
+        // nothing. The practice alphabet leaves it out, and so must the board.
+        let layout = layout("colemak-dh");
+        let emulator = Emulator::new(layout_of("qwerty"), layout.clone());
+        let area = Rect::new(0, 0, 80, board_height(&layout));
+        let terminal = draw("colemak-dh", None, Some(&emulator), 80);
+        let e_rect = key_rects(&layout, area)
+            .into_iter()
+            .find(|(pos, _)| layout.key_at(*pos).is_some_and(|key| key.base == 'e'))
+            .map(|(_, rect)| rect)
+            .expect("colemak-dh has an e key");
+        let altgr_cell = cell_text(&terminal, Rect::new(e_rect.x, e_rect.y, e_rect.width, 1));
+        assert!(
+            !altgr_cell.contains('é'),
+            "the untypeable altgr legend is not offered: {altgr_cell:?}"
+        );
+        assert!(
+            altgr_cell.trim() == "·",
+            "it is marked out of reach instead: {altgr_cell:?}"
+        );
+        let text = cell_text(&terminal, e_rect);
+        assert!(text.contains('e'), "the base letter stays typeable: {text:?}");
+        assert!(text.contains('k'), "with qwerty's k below it: {text:?}");
     }
 
     #[test]
