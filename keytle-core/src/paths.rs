@@ -30,6 +30,11 @@ impl Paths {
         self.config_dir.join("layouts")
     }
 
+    /// `<config_dir>/corpora`, where user corpus files live.
+    pub fn corpora_dir(&self) -> PathBuf {
+        self.config_dir.join("corpora")
+    }
+
     /// `<data_dir>/tests.jsonl`
     pub fn tests_file(&self) -> PathBuf {
         self.data_dir.join("tests.jsonl")

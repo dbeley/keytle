@@ -51,8 +51,8 @@ default = ["t", "n", "s", "e", "r", "i", "a", "o"]
 `en` and `fr` corpora are compiled in, so it works out of the box. `keytle-core`
 can also merge `<dir>/<lang>/words.txt` (`word frequency` per line) and
 `<dir>/<lang>/sentences.txt` on top; the intended location is
-`~/.config/keytle/corpora/<lang>/`. Caveat: the TUI does not yet pass that dir to
-the loader, so today only the bundled corpora are used.
+`~/.config/keytle/corpora/<lang>/`, which the TUI reads, so a file dropped there
+is used by the next lesson.
 
 ## How learning works
 

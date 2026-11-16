@@ -228,10 +228,13 @@ impl App {
                 source,
             }
         })?;
-        let corpus = corpora::load(&config.language, None).map_err(|source| AppError::Corpus {
-            lang: config.language.clone(),
-            source,
-        })?;
+        let corpus =
+            corpora::load(&config.language, Some(&paths.corpora_dir())).map_err(|source| {
+                AppError::Corpus {
+                    lang: config.language.clone(),
+                    source,
+                }
+            })?;
         let emulator = Emulator::new(host.clone(), layout.clone());
         let profile_path = paths.profile_file(&config.layout, &config.language);
         // A fresh profile stands in until `load_profile` below reads the file;
@@ -543,10 +546,13 @@ impl App {
             id: self.config.host_layout.clone(),
             source,
         })?;
-        let corpus = corpora::load(&self.config.language, None).map_err(|source| AppError::Corpus {
-            lang: self.config.language.clone(),
-            source,
-        })?;
+        let corpus =
+            corpora::load(&self.config.language, Some(&self.paths.corpora_dir())).map_err(
+                |source| AppError::Corpus {
+                    lang: self.config.language.clone(),
+                    source,
+                },
+            )?;
         self.emulator = Emulator::new(host.clone(), layout.clone());
         self.layout = layout;
         self.host = host;
@@ -1597,6 +1603,48 @@ mod tests {
             stats.per_key.values().all(|agg| agg.misses == 0 && agg.hits == 0),
             "nothing was charged against the alphabet"
         );
+    }
+
+    #[test]
+    fn a_user_corpus_file_is_loaded_by_the_app() {
+        let scratch = Scratch::new();
+        let baseline = app(&scratch).corpus.words.len();
+        let dir = scratch.paths.corpora_dir().join("en");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("words.txt"), "zorblat 7\n").unwrap();
+
+        let mut app = app(&scratch);
+        assert_eq!(app.corpus.words.len(), baseline + 1);
+        assert!(app.corpus.words.iter().any(|word| word.text == "zorblat"));
+        // A language switch at runtime reloads through the same directory.
+        app.switch_language("fr", 0).unwrap();
+        app.switch_language("en", 0).unwrap();
+        assert!(
+            app.corpus.words.iter().any(|word| word.text == "zorblat"),
+            "the user corpus survives the round trip"
+        );
+    }
+
+    #[test]
+    fn a_user_layout_file_is_offered_by_the_app() {
+        let scratch = Scratch::new();
+        let dir = scratch.paths.layouts_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        // A real board with a new id: the loader rejects an id/file-name clash.
+        let source = keytle_core::layouts::bundled_source("qwerty")
+            .unwrap()
+            .replace("id = \"qwerty\"", "id = \"scratch-qwerty\"")
+            .replace("name = \"QWERTY (US)\"", "name = \"Scratch QWERTY\"");
+        std::fs::write(dir.join("scratch-qwerty.toml"), source).unwrap();
+
+        let config = Config {
+            layout: "scratch-qwerty".to_string(),
+            ..Config::default()
+        };
+        let app = App::new(config, &scratch.paths, 0).unwrap();
+        assert_eq!(app.layout.id, "scratch-qwerty", "the app runs the user board");
+        let ids = layouts::available(&app.paths.layouts_dir());
+        assert!(ids.iter().any(|id| id == "scratch-qwerty"), "{ids:?}");
     }
 
     #[test]
