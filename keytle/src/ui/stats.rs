@@ -8,9 +8,11 @@
 //!
 //! The X axis is the test number: a hundred tests in one afternoon are a hundred
 //! columns, and a week away leaves no gap. Session breaks — where the profile's
-//! unlock budget reset after thirty idle minutes — are marked with `┊` under the
-//! chart, because that is the only thing about the history that is genuinely
-//! about time rather than about tests.
+//! unlock budget reset after [`SESSION_IDLE_MS`] of idle time — are marked with
+//! `┊` under the chart, and every test that unlocked a letter with `▲`, because
+//! those are the only parts of the history that are events rather than numbers.
+//! The personal best is a `━` line drawn across the speed chart at its own
+//! height, and `c` cycles the chart between speed, accuracy and both.
 
 use ratatui::layout::{Constraint, Layout as UiLayout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -21,7 +23,7 @@ use ratatui::Frame;
 use keytle_core::engine::profile::SESSION_IDLE_MS;
 use keytle_core::stats::{self, Filter, KeyRow, Point, TestRecord};
 
-use crate::app::{parse_rfc3339 as parse_ts, App};
+use crate::app::{parse_rfc3339 as parse_ts, App, ChartMode};
 use crate::ui::{fmt_duration, trend_glyph, unlock_line};
 
 /// How tall the speed chart is, in block rows.
@@ -34,13 +36,18 @@ const KEYS_PER_LINE: usize = 3;
 const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 /// Marks the first test after an idle gap long enough to reset the unlock budget.
 const SESSION_MARK: char = '┊';
+/// Marks the test that unlocked a letter.
+const UNLOCK_MARK: char = '▲';
+/// The personal-best line drawn across the speed chart at the best test's
+/// height. Heavy, so it cannot be confused with a panel's light border.
+const PB_MARK: char = '━';
 
 /// Draw the dashboard for the app's current (layout, language, mode) selection.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let filter = app.stats.to_filter(app.config.mode);
     let points = stats::series(&app.records, &filter);
     if points.is_empty() {
-        empty_state(frame, area, app.records.is_empty());
+        empty_state(frame, area, app);
         return;
     }
     // The same predicate the store uses, so "total time" describes exactly the
@@ -55,54 +62,90 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     );
     let best = stats::personal_best(&app.records, &filter);
     let speed: Vec<f32> = points.iter().map(|point| point.wpm).collect();
+    let mode = app.stats.chart;
+    let speed_rows = matches!(mode, ChartMode::Speed | ChartMode::Both);
+    let accuracy_rows = matches!(mode, ChartMode::Accuracy | ChartMode::Both);
 
     let block = Block::bordered().title(header(app, &filter, points.len(), total_ms));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let chunks = UiLayout::vertical([
-        Constraint::Length(CHART_ROWS as u16),
-        Constraint::Length(1), // session breaks, under their own columns
-        Constraint::Length(1), // the test-number axis
-        Constraint::Length(1), // accuracy / consistency / personal best
-        Constraint::Length(1),
-        Constraint::Min(2),    // the key table
-        Constraint::Length(3), // the unlock panel
-        Constraint::Length(1), // the key hints
-    ])
-    .split(inner);
+    // The rows are planned up front so the error line and the two chart halves
+    // only take the space they actually need.
+    let mut plan: Vec<Constraint> = Vec::new();
+    if app.history_error().is_some() {
+        plan.push(Constraint::Length(1));
+    }
+    if speed_rows {
+        plan.push(Constraint::Length(CHART_ROWS as u16));
+    }
+    if accuracy_rows {
+        plan.push(Constraint::Length(CHART_ROWS as u16));
+    }
+    plan.push(Constraint::Length(1)); // the personal best, under its chart
+    plan.push(Constraint::Length(1)); // session breaks and unlocks
+    plan.push(Constraint::Length(1)); // the test-number axis
+    plan.push(Constraint::Length(1)); // accuracy / consistency / personal best
+    plan.push(Constraint::Length(1));
+    plan.push(Constraint::Min(2)); // the key table
+    plan.push(Constraint::Length(3)); // the unlock panel
+    plan.push(Constraint::Length(1)); // the key hints
+    let chunks = UiLayout::vertical(plan).split(inner);
+    let mut rows = chunks.iter();
 
     // Only the newest tests fit; the axis says which numbers they are.
     let width = usize::from(chunks[0].width);
     let first = points.len().saturating_sub(width);
     let shown = &points[first..];
 
-    let max_wpm = shown.iter().map(|point| point.wpm).fold(0.0_f32, f32::max);
-    let chart: Vec<Line> = chart_rows(shown, max_wpm)
-        .into_iter()
-        .map(Line::from)
-        .collect();
-    frame.render_widget(Paragraph::new(chart), chunks[0]);
+    if let Some(err) = app.history_error() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(err, Style::new().fg(Color::Yellow))))
+                .wrap(Wrap { trim: true }),
+            *rows.next().expect("the error row is planned"),
+        );
+    }
+
+    if speed_rows {
+        // The personal best is drawn as a horizontal line at its own height, so
+        // the series is scaled with one row of headroom above it: the line then
+        // sits below the top row and stays visible where the bars are lower.
+        let shown_max = shown.iter().map(|point| point.wpm).fold(0.0_f32, f32::max);
+        let scale = match best {
+            Some(pb) if pb > 0.0 => {
+                (pb * CHART_ROWS as f32 / (CHART_ROWS - 1) as f32).max(shown_max)
+            }
+            _ => shown_max,
+        };
+        let values: Vec<f32> = shown.iter().map(|point| point.wpm).collect();
+        render_chart(frame, *rows.next().expect("a speed row"), &values, scale, best);
+    }
+    if accuracy_rows {
+        // Accuracy is always on its own scale: 0 to 100%, never relative to the
+        // best test, so a flat 97% reads as a full column and not as noise.
+        let values: Vec<f32> = shown.iter().map(|point| point.accuracy).collect();
+        render_chart(frame, *rows.next().expect("an accuracy row"), &values, 1.0, None);
+    }
 
     frame.render_widget(
-        Paragraph::new(Line::from(session_row(
-            &session_starts(&matching),
-            first,
-            width,
+        Paragraph::new(Line::from(Span::styled(
+            best_line(shown, mode),
+            Style::new().fg(Color::Gray),
         ))),
-        chunks[1],
+        *rows.next().expect("the personal-best row"),
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(marker_row(&matching, first, width))),
+        *rows.next().expect("the marker row"),
     );
     frame.render_widget(
         Paragraph::new(Line::from(axis_line(shown, width))),
-        chunks[2],
+        *rows.next().expect("the axis row"),
     );
 
-    let accuracy = shown
-        .last()
-        .map(|point| point.accuracy)
-        .unwrap_or(0.0);
+    let accuracy = shown.last().map(|point| point.accuracy).unwrap_or(0.0);
     let summary = format!(
-        "acc {:.1}%  ·  consistency {:.1}/5  ·  pb {}",
+        "acc {:.1}%  ·  consistency {:.1}/5  ·  pb {}  ·  {UNLOCK_MARK} unlock",
         accuracy * 100.0,
         stats::consistency(&speed),
         best.map(|wpm| format!("{wpm:.0} wpm"))
@@ -112,16 +155,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(Line::from(summary))
             .style(Style::new().fg(Color::Gray))
             .wrap(Wrap { trim: true }),
-        chunks[3],
+        *rows.next().expect("the summary row"),
     );
 
+    rows.next(); // the blank separator
     frame.render_widget(
         Paragraph::new(key_lines(app, &keys))
             .block(Block::bordered().title(format!(
                 "keys · last {KEY_WINDOW} tests · weakest first"
             )))
             .wrap(Wrap { trim: true }),
-        chunks[5],
+        *rows.next().expect("the key table"),
     );
 
     let outcome = app.unlock_outcome();
@@ -130,15 +174,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .block(Block::bordered().title("next unlock"))
             .style(Style::new().fg(Color::Green))
             .wrap(Wrap { trim: true }),
-        chunks[6],
+        *rows.next().expect("the unlock panel"),
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "s/S layout  ·  l language  ·  m merge modes  ·  a all layouts  ·  tab back",
+            "s/S layout  ·  l language  ·  c chart  ·  m merge modes  ·  a all layouts  ·  tab back",
             Style::new().fg(Color::DarkGray),
         ))),
-        chunks[7],
+        *rows.next().expect("the hints row"),
     );
+}
+
+/// One chart: `▁▂▃▄▅▆▇█` columns scaled to `max`, top row first. `marker`, when
+/// given, is a value to draw a horizontal line at (the personal best).
+fn render_chart(frame: &mut Frame, area: Rect, values: &[f32], max: f32, marker: Option<f32>) {
+    let lines: Vec<Line> = chart_rows(values, max, marker)
+        .into_iter()
+        .map(Line::from)
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// The one-line title: what is plotted, how much of it, and how long it took.
@@ -147,26 +201,26 @@ fn header(app: &App, filter: &Filter, tests: usize, total_ms: u64) -> String {
     let lang = filter.lang.as_deref().unwrap_or("all languages");
     let merged = if app.stats.merged { " · (merged)" } else { "" };
     format!(
-        "progress · {layout}/{lang}{merged} · {tests} test{} · {}",
+        "progress · {layout}/{lang}{merged} · {tests} test{} · {} · {} chart",
         if tests == 1 { "" } else { "s" },
-        fmt_duration(total_ms)
+        fmt_duration(total_ms),
+        app.stats.chart.label()
     )
 }
 
-/// The chart, top row first: one column per test, `▁▂▃▄▅▆▇█` scaled to the best
-/// test on screen.
-fn chart_rows(points: &[Point], max_wpm: f32) -> Vec<String> {
-    let max = if max_wpm.is_finite() && max_wpm > 0.0 {
-        max_wpm
-    } else {
-        1.0
-    };
+/// The chart, top row first: one column per test, `▁▂▃▄▅▆▇█` scaled to `max`.
+/// A `marker` value is drawn as a horizontal line of [`PB_MARK`] in the row its
+/// height lands in, filling only the cells a bar has not already reached, so
+/// bars above the line still read as full columns.
+fn chart_rows(values: &[f32], max: f32, marker: Option<f32>) -> Vec<String> {
+    let max = if max.is_finite() && max > 0.0 { max } else { 1.0 };
+    let points: Vec<f32> = values.to_vec();
     // Everything above zero shows at least a sliver, so a flat series is a line
     // of blocks rather than a blank panel.
     let full = (CHART_ROWS * LEVELS.len()) as f32;
     let mut grid = vec![vec![' '; points.len()]; CHART_ROWS];
-    for (col, point) in points.iter().enumerate() {
-        let value = if point.wpm.is_finite() { point.wpm.max(0.0) } else { 0.0 };
+    for (col, value) in points.iter().enumerate() {
+        let value = if value.is_finite() { value.max(0.0) } else { 0.0 };
         let units = ((value / max) * full).ceil().clamp(0.0, full) as usize;
         for (row, line) in grid.iter_mut().enumerate() {
             let base = (CHART_ROWS - 1 - row) * LEVELS.len();
@@ -177,20 +231,62 @@ fn chart_rows(points: &[Point], max_wpm: f32) -> Vec<String> {
             }
         }
     }
+    if let Some(marker) = marker.filter(|value| value.is_finite() && *value > 0.0) {
+        // The row the marker's own block would top out in, counted from the
+        // bottom, then flipped into the grid's top-down order.
+        let units = ((marker / max) * full).ceil().clamp(1.0, full) as usize;
+        let from_bottom = (units - 1) / LEVELS.len();
+        let row = CHART_ROWS - 1 - from_bottom.min(CHART_ROWS - 1);
+        for cell in grid[row].iter_mut() {
+            if *cell == ' ' {
+                *cell = PB_MARK;
+            }
+        }
+    }
     grid.into_iter()
         .map(|row| row.into_iter().collect())
         .collect()
 }
 
-/// The row under the chart marking the first test of each new session.
-fn session_row(breaks: &[usize], first: usize, width: usize) -> String {
+/// The row under the chart marking both things that are events rather than
+/// numbers: the first test of each new session (`┊`) and every test that
+/// unlocked a letter (`▲`). Both are placed under the column of the test they
+/// describe, and an unlock wins a shared column because it is the rarer event.
+fn marker_row(records: &[&TestRecord], first: usize, width: usize) -> String {
     let mut row = vec![' '; width];
-    for &at in breaks {
+    let mut place = |at: usize, glyph: char| {
         if let Some(col) = at.checked_sub(first).filter(|col| *col < width) {
-            row[col] = SESSION_MARK;
+            row[col] = glyph;
+        }
+    };
+    for at in session_starts(records) {
+        place(at, SESSION_MARK);
+    }
+    for (at, rec) in records.iter().enumerate() {
+        if rec.unlocked_after > rec.unlocked_before {
+            place(at, UNLOCK_MARK);
         }
     }
     row.into_iter().collect::<String>().trim_end().to_string()
+}
+
+/// The personal-best line: the best of what is on screen and which test it was,
+/// reading the same series the chart above it just drew.
+fn best_line(shown: &[Point], mode: ChartMode) -> String {
+    let speed = matches!(mode, ChartMode::Speed | ChartMode::Both);
+    let value = |point: &Point| if speed { point.wpm } else { point.accuracy * 100.0 };
+    let Some(top) = shown
+        .iter()
+        .filter(|point| value(point).is_finite())
+        .max_by(|a, b| value(a).total_cmp(&value(b)))
+    else {
+        return "pb —".to_string();
+    };
+    if speed {
+        format!("pb {PB_MARK} {:.0} wpm  ·  test {}", value(top), top.index)
+    } else {
+        format!("pb {:.1}% accuracy  ·  test {}", value(top), top.index)
+    }
 }
 
 /// Which tests begin a new session: the gap since the previous recorded test is
@@ -282,12 +378,15 @@ fn key_lines(app: &App, rows: &[KeyRow]) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// No tests at all is a state, not an error: say what to do about it.
-fn empty_state(frame: &mut Frame, area: Rect, no_file: bool) {
-    let why = if no_file {
-        "no tests yet — finish a lesson and come back"
+/// No tests at all is a state, not an error: say what to do about it. A history
+/// that could not be read says so first, because "no tests" would be a lie.
+fn empty_state(frame: &mut Frame, area: Rect, app: &App) {
+    let why = if let Some(err) = app.history_error() {
+        err
+    } else if app.records.is_empty() {
+        "no tests yet — finish a lesson and come back".to_string()
     } else {
-        "no tests match this filter — press s or a to widen it"
+        "no tests match this filter — press s or a to widen it".to_string()
     };
     let lines = vec![
         Line::from(Span::styled(why, Style::new().fg(Color::Yellow))),
@@ -400,6 +499,116 @@ mod tests {
         assert!(text.contains("30 tests"), "the count is in the header:\n{text}");
         assert!(text.contains('▁') || text.contains('█'), "block glyphs are drawn");
         assert!(text.contains('┊'), "the session break is marked:\n{text}");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn c_cycles_the_chart_through_speed_accuracy_and_both() {
+        let (base, paths) = scratch("chart-toggle");
+        fixture(&paths);
+        let mut app = App::new(Config::default(), &paths, 0).unwrap();
+        app.open_stats();
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        let press = |app: &mut App| {
+            app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE), 0);
+        };
+
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        assert!(screen(&terminal).contains("speed chart"), "{}", screen(&terminal));
+        assert!(screen(&terminal).contains("pb "), "the personal best is named");
+
+        press(&mut app);
+        assert_eq!(app.stats.chart, ChartMode::Accuracy);
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = screen(&terminal);
+        assert!(text.contains("accuracy chart"), "{text}");
+        assert!(text.contains("pb "), "accuracy has its own best: {text}");
+
+        press(&mut app);
+        assert_eq!(app.stats.chart, ChartMode::Both);
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        assert!(screen(&terminal).contains("speed + accuracy chart"));
+        // Two stacked charts, so twice the block rows of one.
+        let blocks = |text: &str| text.chars().filter(|ch| LEVELS.contains(ch)).count();
+        assert!(blocks(&screen(&terminal)) > blocks(&text_of(&paths, &app)));
+
+        press(&mut app);
+        assert_eq!(app.stats.chart, ChartMode::Speed, "c wraps back round");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// The dashboard in speed-only mode, for a block-count comparison.
+    fn text_of(paths: &Paths, app: &App) -> String {
+        let mut speed = App::new(Config::default(), paths, 0).unwrap();
+        speed.open_stats();
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &speed)).unwrap();
+        let _ = app;
+        screen(&terminal)
+    }
+
+    #[test]
+    fn the_speed_chart_draws_the_personal_best_as_a_horizontal_line() {
+        let (base, paths) = scratch("pb-line");
+        fixture(&paths);
+        let mut app = App::new(Config::default(), &paths, 0).unwrap();
+        app.open_stats();
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = screen(&terminal);
+        let line = text
+            .lines()
+            .position(|row| row.contains(PB_MARK))
+            .unwrap_or_else(|| panic!("the personal best is drawn as a line:\n{text}"));
+        let label = text
+            .lines()
+            .position(|row| row.contains(&format!("pb {PB_MARK}")))
+            .unwrap_or_else(|| panic!("the line is named under the chart:\n{text}"));
+        assert!(line < label, "the line is on the chart, not the text:\n{text}");
+        // It is a line across the chart, not one lonely cell.
+        assert!(
+            text.lines().nth(line).unwrap().matches(PB_MARK).count() > 1,
+            "the marker spans the chart:\n{text}"
+        );
+
+        // Accuracy has no personal-best line: its scale is 0–100%, not the best.
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE), 0);
+        assert_eq!(app.stats.chart, ChartMode::Accuracy);
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = screen(&terminal);
+        assert!(!text.contains(PB_MARK), "no pb line on the accuracy chart:\n{text}");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_test_that_unlocked_a_letter_is_marked_on_the_axis() {
+        let (base, paths) = scratch("unlock-marks");
+        let path = paths.tests_file();
+        for i in 0..6u64 {
+            let mut rec = record(&crate::app::rfc3339(1_780_000_000_000 + i * 60_000), 40.0 + i as f32, None);
+            if i == 3 {
+                rec.unlocked_before = 4;
+                rec.unlocked_after = 5;
+            }
+            append(&path, &rec).unwrap();
+        }
+        let mut app = App::new(Config::default(), &paths, 0).unwrap();
+        app.open_stats();
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = screen(&terminal);
+        assert!(text.contains(UNLOCK_MARK), "the unlock is marked: {text}");
+        let marked = text
+            .lines()
+            .find(|line| line.contains(UNLOCK_MARK))
+            .expect("the marker row");
+        // The marker sits under the fourth column of the chart (column 0 is the
+        // panel's border), one column per test.
+        let column = marked
+            .chars()
+            .position(|ch| ch == UNLOCK_MARK)
+            .expect("the marker is in its row");
+        assert_eq!(column, 4, "{marked:?}");
         let _ = std::fs::remove_dir_all(base);
     }
 

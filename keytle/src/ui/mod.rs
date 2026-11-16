@@ -16,8 +16,10 @@ use crate::app::{App, Screen, UnlockOutcome};
 use keytle_core::engine::profile::{BlockReason, Verdict};
 use keytle_core::stats::Trend;
 
+pub mod help;
 pub mod keyboard;
 pub mod results;
+pub mod settings;
 pub mod stats;
 pub mod typing;
 
@@ -39,7 +41,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Typing => typing::render(frame, app),
         Screen::Results => results::render(frame, area, app),
         Screen::Stats => stats::render(frame, area, app),
-        Screen::Settings | Screen::Help => placeholder(frame, area, app),
+        Screen::Settings => settings::render(frame, area, app),
+        Screen::Help => help::render(frame, area, app),
     }
 }
 
@@ -64,36 +67,6 @@ fn too_small(frame: &mut Frame, area: Rect) {
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true }),
         panel,
-    );
-}
-
-/// Screens that later tasks fill in: say so rather than draw something wrong.
-fn placeholder(frame: &mut Frame, area: Rect, app: &App) {
-    let title = match app.screen {
-        Screen::Settings => "settings",
-        Screen::Help => "help",
-        _ => "keytle",
-    };
-    let mut lines = vec![Line::from(Span::styled(
-        "this screen arrives with the next task",
-        Style::new().fg(Color::DarkGray),
-    ))];
-    if let Some(notice) = &app.notice {
-        lines.push(Line::from(Span::styled(
-            notice.clone(),
-            Style::new().fg(Color::Yellow),
-        )));
-    }
-    lines.push(Line::from(Span::styled(
-        "esc returns to typing",
-        Style::new().fg(Color::DarkGray),
-    )));
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::bordered().title(title))
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        area,
     );
 }
 
@@ -129,7 +102,10 @@ pub fn unlock_line(outcome: &UnlockOutcome) -> String {
             keytle_core::engine::profile::UNLOCK_ACCURACY * 100.0
         ),
         Verdict::Blocked(BlockReason::SessionCap) => {
-            format!("{ch} — three unlocks this session; a 30-minute break resets it")
+            format!(
+                "{ch} — three unlocks this session; a {} break resets it",
+                fmt_duration(keytle_core::engine::profile::SESSION_IDLE_MS)
+            )
         }
         Verdict::Blocked(BlockReason::NoNextKey) => "every letter is unlocked".to_string(),
     }
@@ -189,6 +165,33 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn help_screen_lists_every_binding() {
+        let (base, mut app) = app();
+        app.open_help();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = screen(&terminal);
+        for expected in ["esc", "tab", "unlock next", "lock current", "stats", "help", "quit", "merge modes"] {
+            assert!(text.contains(expected), "{expected} is drawn:\n{text}");
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn settings_screen_draws_the_values_it_edits() {
+        let (base, mut app) = app();
+        app.open_settings();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = screen(&terminal);
+        assert!(text.contains("settings"), "{text}");
+        assert!(text.contains("colemak-dh"), "{text}");
+        assert!(text.contains("target wpm"), "{text}");
+        assert!(text.contains("80"), "{text}");
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

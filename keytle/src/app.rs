@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use keytle_core::config::{Config, Mode};
+use keytle_core::config::{Config, ConfigError, Mode};
 use keytle_core::corpora;
 use keytle_core::corpus::{Corpus, CorpusError};
 use keytle_core::emulate::Emulator;
@@ -29,10 +29,10 @@ use keytle_core::typing::{SessionStats, TypingSession};
 
 /// Which screen is in front.
 ///
-/// `Typing`, `Results` and `Stats` are reachable today; `Settings` and `Help`
-/// exist so their tasks add a body, not an enum.
+/// `Typing` is home: `s` opens the dashboard from it, `?` the help, and `esc`
+/// or `q` closes both again — always back to typing, because that is the screen
+/// a lesson starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "settings and help screens arrive with a later task")]
 pub enum Screen {
     Typing,
     Stats,
@@ -63,6 +63,39 @@ pub enum AppError {
     Corpus { lang: String, source: CorpusError },
 }
 
+/// Which series the dashboard's chart draws. `c` cycles speed → accuracy →
+/// both, and the toggle is remembered for the session, not written anywhere.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ChartMode {
+    /// Net words per minute, one column per test.
+    #[default]
+    Speed,
+    /// Per-test accuracy, on a fixed 0–100% scale.
+    Accuracy,
+    /// Both, speed on top.
+    Both,
+}
+
+impl ChartMode {
+    /// The next mode in the cycle, wrapping back to speed.
+    pub fn next(self) -> ChartMode {
+        match self {
+            ChartMode::Speed => ChartMode::Accuracy,
+            ChartMode::Accuracy => ChartMode::Both,
+            ChartMode::Both => ChartMode::Speed,
+        }
+    }
+
+    /// The one word the chart's title uses.
+    pub fn label(self) -> &'static str {
+        match self {
+            ChartMode::Speed => "speed",
+            ChartMode::Accuracy => "accuracy",
+            ChartMode::Both => "speed + accuracy",
+        }
+    }
+}
+
 /// What the stats dashboard is showing. `None` means "every one in the file".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatsFilter {
@@ -70,6 +103,8 @@ pub struct StatsFilter {
     pub lang: Option<String>,
     /// Fold pseudo/words/sentences into one line; the header says `(merged)`.
     pub merged: bool,
+    /// Which series the chart plots; `c` cycles it.
+    pub chart: ChartMode,
 }
 
 impl StatsFilter {
@@ -95,6 +130,25 @@ pub struct UnlockOutcome {
     pub mean: Option<f32>,
 }
 
+/// The settings screen's editable rows, in the order they are drawn. The index
+/// into this table is the cursor the screen moves, and each row's values come
+/// from [`App::settings_values`].
+pub const SETTINGS_ROWS: [&str; 8] = [
+    "layout",
+    "host layout",
+    "language",
+    "mode",
+    "emulate",
+    "strict",
+    "lesson words",
+    "target wpm",
+];
+
+/// The lesson sizes `settings_cycle` steps through, smallest first.
+const LESSON_WORDS: [usize; 5] = [10, 20, 30, 40, 50];
+/// The target speeds `settings_cycle` steps through, slowest first.
+const TARGET_WPMS: [f32; 7] = [40.0, 60.0, 80.0, 100.0, 120.0, 150.0, 200.0];
+
 /// Everything the UI reads: settings, the two boards, the profile, the lesson.
 pub struct App {
     pub config: Config,
@@ -118,6 +172,9 @@ pub struct App {
     pub last_miss: Option<char>,
     /// The lesson history, in file order. Loaded at start-up, appended on finish.
     pub records: Vec<TestRecord>,
+    /// Why the history could not be read, when it could not. Kept so the screens
+    /// that show history can say so instead of quietly showing none.
+    history_error: Option<String>,
     /// The three weakest keys of the last finished lesson, weakest first.
     pub last_weak: Vec<KeyRow>,
     /// The unlock rule's answer after the last finished lesson.
@@ -130,6 +187,18 @@ pub struct App {
     reachable_chars: BTreeSet<char>,
     profile_path: PathBuf,
     tests_path: PathBuf,
+    /// Where layouts, profiles and the history live. A layout or language
+    /// switch has to resolve the new layout and the new profile file from here.
+    paths: Paths,
+    /// The host board's layout, kept so reachability can be recomputed when the
+    /// settings change the host or turn emulation on and off.
+    host: Layout,
+    /// Which row the settings cursor is on, as an index into [`SETTINGS_ROWS`].
+    settings_row: usize,
+    /// The settings as they were when the screen opened: `esc` puts them back.
+    settings_backup: Option<Config>,
+    /// The screen `?` was pressed on, so help closes back onto it.
+    help_return: Screen,
 }
 
 impl App {
@@ -158,28 +227,29 @@ impl App {
         })?;
         let emulator = Emulator::new(host.clone(), layout.clone());
         let profile_path = paths.profile_file(&config.layout, &config.language);
-        let profile = match Profile::load(&profile_path) {
-            Ok(profile) => profile,
-            Err(_) => {
-                let profile = Profile::new(&layout, &config.language, now_ms);
-                let _ = profile.save(&profile_path);
-                profile
-            }
-        };
+        // A fresh profile stands in until `load_profile` below reads the file;
+        // on first run it is the one that gets saved.
+        let profile = Profile::new(&layout, &config.language, now_ms);
         let reachable_positions = positions_reachable(&layout, &host, config.emulate);
         let reachable_chars = chars_reachable(&layout, &reachable_positions);
         let tests_path = paths.tests_file();
         // An unreadable or corrupted history must not stop the trainer from
-        // starting: the dashboard says so instead, and the typing works.
-        let records = stats::read_all(&tests_path).unwrap_or_default();
+        // starting: the error is kept and the history screens say so, while the
+        // typing works and every new test is still appended.
+        let (records, history_error) = match stats::read_all(&tests_path) {
+            Ok(records) => (records, None),
+            Err(err) => (Vec::new(), Some(err.to_string())),
+        };
         let stats_filter = StatsFilter {
             layout: Some(config.layout.clone()),
             lang: Some(config.language.clone()),
             merged: false,
+            chart: ChartMode::Speed,
         };
-        Ok(App {
+        let mut app = App {
             config,
             layout,
+            host,
             emulator,
             profile,
             corpus,
@@ -195,10 +265,18 @@ impl App {
             profile_path,
             tests_path,
             records,
+            history_error,
             last_weak: Vec::new(),
             last_unlock: None,
             stats: stats_filter,
-        })
+            paths: paths.clone(),
+            settings_row: 0,
+            settings_backup: None,
+            help_return: Screen::Typing,
+        };
+        // The file's progress wins over the placeholder whenever there is one.
+        app.load_profile(now_ms);
+        Ok(app)
     }
 
     /// Handle one key. Pure: no terminal is touched, and the clock comes in.
@@ -207,6 +285,13 @@ impl App {
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
         {
             return Action::Quit;
+        }
+        // Settings and help own their keys outright: a stale `enter` must not
+        // start a lesson behind a panel.
+        match self.screen {
+            Screen::Settings => return self.settings_key(key, now_ms),
+            Screen::Help => return self.help_key(key),
+            _ => {}
         }
         if self.screen != Screen::Typing {
             match key.code {
@@ -241,8 +326,24 @@ impl App {
                 Action::StartLesson
             }
             KeyCode::Char('q') if self.is_idle() => Action::Quit,
-            KeyCode::Char('u') if self.is_idle() => {
+            KeyCode::Char('s') if self.is_idle() => {
                 self.open_stats();
+                Action::Redraw
+            }
+            KeyCode::Char('?') if self.is_idle() => {
+                self.open_help();
+                Action::Redraw
+            }
+            KeyCode::Char(',') if self.is_idle() => {
+                self.open_settings();
+                Action::Redraw
+            }
+            KeyCode::Char('u') if self.is_idle() => {
+                self.unlock_next(now_ms);
+                Action::Redraw
+            }
+            KeyCode::Char('l') if self.is_idle() => {
+                self.lock_current();
                 Action::Redraw
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -392,14 +493,268 @@ impl App {
         self.screen = Screen::Results;
     }
 
+    /// Switch the layout being taught, and load the profile that belongs to the
+    /// new (layout, language) pair.
+    ///
+    /// Nothing carries over: the profile file *is* a pair's whole memory, so
+    /// switching to `bepo` reads `bepo.<lang>.json` and can never show the
+    /// unlocks earned on the board that was on screen a moment ago.
+    pub fn switch_layout(&mut self, id: &str, now_ms: u64) -> Result<(), AppError> {
+        let previous = std::mem::replace(&mut self.config.layout, id.to_string());
+        if let Err(err) = self.rebuild(now_ms) {
+            self.config.layout = previous;
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    /// Switch the corpus language, loading the profile for the new pair.
+    pub fn switch_language(&mut self, lang: &str, now_ms: u64) -> Result<(), AppError> {
+        let previous = std::mem::replace(&mut self.config.language, lang.to_string());
+        if let Err(err) = self.rebuild(now_ms) {
+            self.config.language = previous;
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    /// Re-derive everything that depends on the config: both boards, the
+    /// emulator, the reachable alphabet, the corpus and the profile.
+    ///
+    /// Every load happens before any assignment, so a layout or corpus that does
+    /// not resolve leaves the app exactly as it was.
+    fn rebuild(&mut self, now_ms: u64) -> Result<(), AppError> {
+        let dir = self.paths.layouts_dir();
+        let layout = layouts::load(&self.config.layout, &dir).map_err(|source| AppError::Layout {
+            id: self.config.layout.clone(),
+            source,
+        })?;
+        let host = layouts::load(&self.config.host_layout, &dir).map_err(|source| AppError::Layout {
+            id: self.config.host_layout.clone(),
+            source,
+        })?;
+        let corpus = corpora::load(&self.config.language, None).map_err(|source| AppError::Corpus {
+            lang: self.config.language.clone(),
+            source,
+        })?;
+        self.emulator = Emulator::new(host.clone(), layout.clone());
+        self.layout = layout;
+        self.host = host;
+        self.corpus = corpus;
+        self.refresh_reachability();
+        self.load_profile(now_ms);
+        // A lesson in flight was generated for the old alphabet.
+        self.session = None;
+        self.lesson = None;
+        self.last_miss = None;
+        Ok(())
+    }
+
+    /// Which target positions, and therefore characters, the host board can type.
+    fn refresh_reachability(&mut self) {
+        self.reachable_positions =
+            positions_reachable(&self.layout, &self.host, self.config.emulate);
+        self.reachable_chars = chars_reachable(&self.layout, &self.reachable_positions);
+    }
+
+    /// Load the profile for the current (layout, language) pair, creating and
+    /// saving a fresh one when there is no file yet.
+    fn load_profile(&mut self, now_ms: u64) {
+        let path = self
+            .paths
+            .profile_file(&self.config.layout, &self.config.language);
+        self.profile = match Profile::load(&path) {
+            Ok(profile) => profile,
+            Err(_) => {
+                let profile = Profile::new(&self.layout, &self.config.language, now_ms);
+                let _ = profile.save(&path);
+                profile
+            }
+        };
+        self.profile_path = path;
+    }
+
+    /// Change one config field and rebuild; a value that does not resolve is
+    /// rolled back rather than left half-applied.
+    fn edit_config(&mut self, now_ms: u64, change: impl FnOnce(&mut Config)) {
+        let previous = self.config.clone();
+        change(&mut self.config);
+        if let Err(err) = self.rebuild(now_ms) {
+            self.config = previous;
+            self.notice = Some(err.to_string());
+        }
+    }
+
+    /// Open the settings screen, remembering the settings `esc` puts back.
+    pub fn open_settings(&mut self) {
+        self.settings_backup = Some(self.config.clone());
+        self.settings_row = 0;
+        self.screen = Screen::Settings;
+        self.notice = None;
+    }
+
+    /// Leave the settings screen without saving: restore the opening snapshot.
+    pub fn discard_settings(&mut self, now_ms: u64) {
+        if let Some(config) = self.settings_backup.take() {
+            self.config = config;
+            if let Err(err) = self.rebuild(now_ms) {
+                self.notice = Some(format!("settings could not be restored: {err}"));
+            }
+        }
+        self.screen = Screen::Typing;
+    }
+
+    /// Write the edited settings to the config file, then read them back from
+    /// it — so what the screen shows is exactly what a restart would load.
+    pub fn save_settings(&mut self, now_ms: u64) -> Result<PathBuf, ConfigError> {
+        let path = self.paths.config_file();
+        self.config.save(&path)?;
+        self.config = Config::load(&path)?;
+        self.settings_backup = Some(self.config.clone());
+        match self.rebuild(now_ms) {
+            Ok(()) => self.notice = Some(format!("settings saved to {}", path.display())),
+            // The file is good; only the live reload failed. Say which.
+            Err(err) => self.notice = Some(format!("saved to {}, but: {err}", path.display())),
+        }
+        Ok(path)
+    }
+
+    /// Where a saved config would go, as the settings screen states it.
+    pub fn config_file(&self) -> PathBuf {
+        self.paths.config_file()
+    }
+
+    /// Which row the settings cursor is on.
+    pub fn settings_row(&self) -> usize {
+        self.settings_row
+    }
+
+    /// The value of every settings row, in [`SETTINGS_ROWS`] order.
+    pub fn settings_values(&self) -> Vec<String> {
+        vec![
+            self.config.layout.clone(),
+            self.config.host_layout.clone(),
+            self.config.language.clone(),
+            self.config.mode.to_string(),
+            on_off(self.config.emulate),
+            on_off(self.config.strict),
+            self.config.lesson_words.to_string(),
+            format!("{:.0}", self.config.target_wpm),
+        ]
+    }
+
+    /// Move the settings cursor by `delta` rows, wrapping at either end.
+    pub fn settings_move(&mut self, delta: isize) {
+        let rows = SETTINGS_ROWS.len() as isize;
+        self.settings_row = ((self.settings_row as isize + delta).rem_euclid(rows)) as usize;
+    }
+
+    /// Step the selected setting to its next (or previous) value and apply it to
+    /// the live app, so the typing screen matches what the settings show.
+    pub fn settings_cycle(&mut self, now_ms: u64, forward: bool) {
+        match self.settings_row {
+            0 => {
+                let ids = layouts::available(&self.paths.layouts_dir());
+                let next = step_in(&ids, &self.config.layout, forward);
+                if let Err(err) = self.switch_layout(&next, now_ms) {
+                    self.notice = Some(err.to_string());
+                }
+            }
+            1 => {
+                let ids: Vec<String> = layouts::host_ids().iter().map(|id| (*id).to_string()).collect();
+                let next = step_in(&ids, &self.config.host_layout, forward);
+                self.edit_config(now_ms, |config| config.host_layout = next);
+            }
+            2 => {
+                let langs: Vec<String> = corpora::languages().iter().map(|l| (*l).to_string()).collect();
+                let next = step_in(&langs, &self.config.language, forward);
+                if let Err(err) = self.switch_language(&next, now_ms) {
+                    self.notice = Some(err.to_string());
+                }
+            }
+            3 => {
+                const MODES: [Mode; 3] = [Mode::Pseudo, Mode::Words, Mode::Sentences];
+                let at = MODES.iter().position(|mode| *mode == self.config.mode).unwrap_or(0);
+                let next = if forward { (at + 1) % MODES.len() } else { (at + 2) % MODES.len() };
+                self.config.mode = MODES[next];
+            }
+            4 => {
+                self.config.emulate = !self.config.emulate;
+                // Emulation is what makes a position out of reach in the first
+                // place, so the alphabet depends on this flag.
+                self.refresh_reachability();
+            }
+            5 => self.config.strict = !self.config.strict,
+            6 => {
+                self.config.lesson_words = step_in(&LESSON_WORDS, &self.config.lesson_words, forward);
+            }
+            _ => {
+                self.config.target_wpm = step_in(&TARGET_WPMS, &self.config.target_wpm, forward);
+            }
+        }
+    }
+
+    /// Unlock the next letter of the teaching order on the user's say-so, past
+    /// the rule. The `u` binding the help screen advertises.
+    pub fn unlock_next(&mut self, now_ms: u64) {
+        let Some(ch) = self
+            .profile
+            .next_key(&self.layout, &self.config.language, &self.reachable_chars)
+        else {
+            self.notice = Some("every letter is unlocked".to_string());
+            return;
+        };
+        self.profile.unlock_manually(ch, now_ms);
+        self.notice = Some(match self.profile.save(&self.profile_path) {
+            Ok(()) => format!("unlocked {ch} (manual)"),
+            Err(err) => format!("unlocked {ch} (not saved: {err})"),
+        });
+    }
+
+    /// Pin the current unlocks by writing the profile now, so closing the
+    /// terminal mid-lesson cannot lose them. The `l` binding.
+    pub fn lock_current(&mut self) {
+        let count = self.profile.unlocked.len();
+        self.notice = Some(match self.profile.save(&self.profile_path) {
+            Ok(()) => format!("locked {count} keys"),
+            Err(err) => format!("profile not saved: {err}"),
+        });
+    }
+
+    /// Open the help screen, remembering where to return to.
+    pub fn open_help(&mut self) {
+        self.help_return = self.screen;
+        self.screen = Screen::Help;
+        self.notice = None;
+    }
+
+    /// Close help, back where it was opened from.
+    pub fn close_help(&mut self) {
+        self.screen = self.help_return;
+    }
+
     /// Show the dashboard, re-reading the history first so a lesson finished in
     /// another window (or by another tool) is not invisible.
     pub fn open_stats(&mut self) {
         match stats::read_all(&self.tests_path) {
-            Ok(records) => self.records = records,
-            Err(err) => self.notice = Some(format!("stats unreadable: {err}")),
+            Ok(records) => {
+                self.records = records;
+                self.history_error = None;
+            }
+            Err(err) => {
+                self.records = Vec::new();
+                self.history_error = Some(err.to_string());
+            }
         }
         self.screen = Screen::Stats;
+    }
+
+    /// The history-read failure, phrased for every screen that draws it, or
+    /// `None` when the file read cleanly.
+    pub fn history_error(&self) -> Option<String> {
+        self.history_error
+            .as_ref()
+            .map(|err| format!("history could not be read: {err} — new tests are still recorded"))
     }
 
     /// What the unlock rule would say right now, with the letter it is about.
@@ -462,10 +817,47 @@ impl App {
         seen.into_iter()
     }
 
+    /// Keys the settings screen owns: `w` saves, `esc`/`q` throw the edits away,
+    /// `j`/`k` (or the up/down arrows) move the cursor, and `space`, `enter` or
+    /// the left/right arrows step the selected value.
+    fn settings_key(&mut self, key: KeyEvent, now_ms: u64) -> Action {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.discard_settings(now_ms),
+            KeyCode::Char('w') => {
+                if let Err(err) = self.save_settings(now_ms) {
+                    self.notice = Some(format!("not saved: {err}"));
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down => self.settings_move(1),
+            KeyCode::Char('k') | KeyCode::Up => self.settings_move(-1),
+            KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Right => self.settings_cycle(now_ms, true),
+            KeyCode::Left | KeyCode::Backspace => self.settings_cycle(now_ms, false),
+            _ => {}
+        }
+        Action::Redraw
+    }
+
+    /// Keys the help screen owns: any of the ways out closes it.
+    fn help_key(&mut self, key: KeyEvent) -> Action {
+        if matches!(
+            key.code,
+            KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('?')
+                | KeyCode::Tab
+                | KeyCode::Enter
+        ) {
+            self.close_help();
+        }
+        Action::Redraw
+    }
+
     /// Handle the letters the non-typing screens own.
     fn other_screen_char(&mut self, code: KeyCode) {
         match (self.screen, code) {
             (Screen::Results, KeyCode::Char('s')) => self.open_stats(),
+            (Screen::Results | Screen::Stats, KeyCode::Char('?')) => self.open_help(),
+            (Screen::Stats, KeyCode::Char('c')) => self.stats.chart = self.stats.chart.next(),
             (Screen::Stats, KeyCode::Char('s')) => self.cycle_layout(true),
             (Screen::Stats, KeyCode::Char('S')) => self.cycle_layout(false),
             (Screen::Stats, KeyCode::Char('l')) => self.cycle_lang(),
@@ -518,6 +910,30 @@ impl App {
     /// as unreachable.
     pub fn reachable_positions(&self) -> &BTreeSet<Position> {
         &self.reachable_positions
+    }
+}
+
+/// The next value after `current` in `list`, wrapping at either end. A value
+/// that is not in the list at all steps to the first one, so a hand-edited
+/// config with an unusual speed still cycles to something the screen offers.
+fn step_in<T: Clone + PartialEq>(list: &[T], current: &T, forward: bool) -> T {
+    let Some(at) = list.iter().position(|item| item == current) else {
+        return list.first().cloned().unwrap_or_else(|| current.clone());
+    };
+    let next = if forward {
+        (at + 1) % list.len()
+    } else {
+        (at + list.len() - 1) % list.len()
+    };
+    list[next].clone()
+}
+
+/// `on` / `off`, the way the settings screen shows a boolean.
+fn on_off(value: bool) -> String {
+    if value {
+        "on".to_string()
+    } else {
+        "off".to_string()
     }
 }
 
@@ -767,6 +1183,150 @@ mod tests {
         app.session = Some(TypingSession::new("f", app.config.strict, 0));
         let action = app.handle_key(key(KeyCode::Char('e')), 100);
         assert_eq!(action, Action::Finish, "e on qwerty is f on Colemak-DH");
+    }
+
+    #[test]
+    fn saving_settings_writes_the_file_and_reloads_the_same_values() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.open_settings();
+        app.settings_move(4); // emulate
+        app.settings_cycle(0, true);
+        assert!(!app.config.emulate, "the toggle took in memory");
+        app.settings_move(3); // target wpm
+        app.settings_cycle(0, true);
+        let expected = app.config.clone();
+        assert_eq!(expected.target_wpm, 100.0, "80 steps up to 100");
+
+        app.save_settings(0).expect("save");
+        let path = scratch.paths.config_file();
+        assert!(path.is_file(), "{} was written", path.display());
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("target_wpm = 100"), "{raw}");
+        assert_eq!(
+            Config::load(&path).unwrap(),
+            expected,
+            "the file holds what the screen showed"
+        );
+        assert_eq!(app.config, expected, "the app reloaded the same values");
+    }
+
+    #[test]
+    fn a_corrupt_middle_line_is_surfaced_not_swallowed() {
+        let scratch = Scratch::new();
+        let path = scratch.paths.tests_file();
+        std::fs::create_dir_all(scratch.paths.data_dir.clone()).unwrap();
+        let line = r#"{"v":1,"ts":"2026-11-15T10:00:00Z","layout":"colemak-dh","host":"qwerty","emulated":true,"lang":"en","mode":"pseudo","lesson":0,"wpm":40.0,"raw_wpm":44.0,"accuracy":0.96,"duration_ms":30000,"keys":{},"unlocked_before":4,"unlocked_after":5}"#;
+        std::fs::write(&path, format!("{line}\nnot a record\n{line}\n")).unwrap();
+
+        let mut app = app(&scratch);
+        let err = app
+            .history_error()
+            .expect("a corrupt middle line is an error, not an empty history");
+        assert!(err.contains("history could not be read"), "{err}");
+        assert!(err.contains("new tests are still recorded"), "{err}");
+        assert!(err.contains("line 2"), "the bad line is named: {err}");
+
+        // The trainer still runs, and the next finished lesson is appended.
+        app.config.emulate = false;
+        app.start_lesson(0);
+        let text = app.lesson.as_ref().unwrap().text.clone();
+        for (i, ch) in text.chars().enumerate() {
+            if app.handle_key(key(KeyCode::Char(ch)), 100 + i as u64) == Action::Finish {
+                app.finish_lesson(100 + i as u64);
+            }
+        }
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw.lines().count(), 4, "the new test landed:\n{raw}");
+        assert_eq!(app.records.len(), 1, "the app keeps what it wrote itself");
+    }
+
+    #[test]
+    fn esc_on_settings_discards_the_edits() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        let before = app.config.clone();
+        app.open_settings();
+        app.settings_move(6);
+        app.settings_cycle(0, true);
+        assert_ne!(app.config.lesson_words, before.lesson_words);
+        app.handle_key(key(KeyCode::Esc), 0);
+        assert_eq!(app.screen, Screen::Typing);
+        assert_eq!(app.config, before, "esc leaves without saving");
+        assert!(!scratch.paths.config_file().is_file(), "nothing was written");
+    }
+
+    #[test]
+    fn switching_layout_loads_the_profile_for_the_new_pair() {
+        let scratch = Scratch::new();
+        let config = Config {
+            language: "fr".to_string(),
+            ..Config::default()
+        };
+        let mut app = App::new(config, &scratch.paths, 0).unwrap();
+        // Give colemak-dh a history the bepo profile must not inherit.
+        app.profile.unlocked.insert('z');
+        app.profile.tests_completed = 7;
+        app.profile
+            .save(&scratch.paths.profile_file("colemak-dh", "fr"))
+            .unwrap();
+
+        app.switch_layout("bepo", 0).expect("bepo is bundled");
+        assert_eq!(app.config.layout, "bepo");
+        assert_eq!(app.layout.id, "bepo");
+        assert_eq!(app.profile.layout, "bepo");
+        assert_eq!(app.profile.lang, "fr");
+        assert_eq!(app.profile.tests_completed, 0, "no tests carried over");
+        let fresh = Profile::new(&app.layout, "fr", 0);
+        assert_eq!(app.profile.unlocked, fresh.unlocked, "bepo.fr's own alphabet");
+        assert!(!app.profile.unlocked.contains(&'z'), "colemak's unlock stayed behind");
+        // The pair's own file exists now, and it is the one the app reads.
+        let path = scratch.paths.profile_file("bepo", "fr");
+        assert!(path.is_file(), "{} was created", path.display());
+        assert_eq!(Profile::load(&path).unwrap().layout, "bepo");
+    }
+
+    #[test]
+    fn switching_language_loads_that_language_s_profile() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.profile.unlocked.insert('z');
+        app.switch_language("fr", 0).expect("fr is bundled");
+        assert_eq!(app.config.language, "fr");
+        assert_eq!(app.profile.lang, "fr");
+        assert!(!app.profile.unlocked.contains(&'z'));
+        assert!(scratch.paths.profile_file("colemak-dh", "fr").is_file());
+    }
+
+    #[test]
+    fn question_mark_opens_help_and_esc_comes_back() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.handle_key(key(KeyCode::Char('?')), 0);
+        assert_eq!(app.screen, Screen::Help);
+        app.handle_key(key(KeyCode::Esc), 0);
+        assert_eq!(app.screen, Screen::Typing);
+        // …and from the dashboard, it returns to the dashboard.
+        app.open_stats();
+        app.handle_key(key(KeyCode::Char('?')), 0);
+        assert_eq!(app.screen, Screen::Help);
+        app.handle_key(key(KeyCode::Char('?')), 0);
+        assert_eq!(app.screen, Screen::Stats);
+    }
+
+    #[test]
+    fn u_unlocks_the_next_key_and_l_saves_the_profile() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        let before = app.profile.unlocked.len();
+        app.handle_key(key(KeyCode::Char('u')), 0);
+        assert_eq!(app.profile.unlocked.len(), before + 1);
+        assert!(app.notice.as_deref().unwrap().contains("unlocked"));
+        app.handle_key(key(KeyCode::Char('l')), 0);
+        assert!(app.notice.as_deref().unwrap().contains("locked"));
+        let saved = Profile::load(&scratch.paths.profile_file(&app.config.layout, &app.config.language))
+            .expect("the profile was written");
+        assert_eq!(saved.unlocked.len(), before + 1);
     }
 
     #[test]
