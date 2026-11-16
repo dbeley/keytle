@@ -1,7 +1,7 @@
 //! The on-screen keyboard: the layout drawn from its positions.
 //!
-//! A layout is data — `(row, col)` positions with a `row_offset` stagger per row
-//! — so the board is laid out arithmetically rather than painted by hand. Each
+//! A layout is data: `(row, col)` positions with a `row_offset` stagger per row.
+//! The board is therefore laid out arithmetically rather than painted by hand. Each
 //! key is a cell [`KEY_WIDTH`] wide and either two or three rows tall: the third
 //! row exists only when the layout has altgr legends, so the altgr character can
 //! sit above its base (`é` over `e`) and the host legend, when emulating, below
@@ -42,7 +42,7 @@ pub fn next_key_style() -> Style {
 /// The base legend always takes a row. An altgr legend takes the row above it,
 /// and the host legend a row below: a board showing neither needs one row per
 /// key, not three rows of mostly blank cells. The altgr row is only drawn when
-/// the level can produce something at all — a whole row of `·` says no more
+/// the level can produce something at all - a whole row of `·` says no more
 /// than the one dot it replaces, and it is a quarter of the board's height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Legends {
@@ -57,7 +57,7 @@ impl Legends {
     /// an emulated Colemak-DH board on a QWERTY host can type three of its
     /// forty-six altgr legends, and a row holding three glyphs and forty-three
     /// blanks is neither readable nor honest about what the board offers. When
-    /// at least half the level is reachable, the level is real and is drawn —
+    /// at least half the level is reachable, the level is real and is drawn -
     /// with the individual legends that are not reachable left out.
     pub fn of(layout: &Layout, emulated: bool, reachable: &BTreeSet<char>) -> Legends {
         let with_altgr = layout
@@ -138,7 +138,7 @@ pub fn key_rects(layout: &Layout, area: Rect, legends: Legends) -> Vec<(Position
 
 /// Draw the board. `next` is the character the typist must produce, `emulator`
 /// is present only when emulation is on, and `reachable` is the level-aware set
-/// of characters a keystroke can actually produce — the same alphabet lessons
+/// of characters a keystroke can actually produce - the same alphabet lessons
 /// are drawn from, so a key the host cannot deliver never looks typable.
 pub fn render(
     frame: &mut Frame,
@@ -434,7 +434,7 @@ mod tests {
         // One altgr legend out of reach, the rest of the level alive: the row is
         // drawn for the legends that work, and the key that cannot deliver its
         // own simply does not offer one. (A level with nothing reachable draws
-        // no row at all — see the test below.)
+        // no row at all - see the test below.)
         let layout = layout("colemak-dh");
         let mut reachable = all_chars(&layout);
         reachable.remove(&'é');

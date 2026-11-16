@@ -8,15 +8,15 @@
 //! Pseudo-words come from three generators, because a bigram model trained on a
 //! real language has almost no mass left once the alphabet is four letters:
 //!
-//! * **fewer than 6 letters** — syllable templates (`CVC`, `VCVC`, `CVCVC`) over
+//! * **fewer than 6 letters** - syllable templates (`CVC`, `VCVC`, `CVCVC`) over
 //!   the letter's own vowels and consonants; there is nothing else to go on,
-//! * **6 to 10 letters** — the corpus bigram model mixed with a uniform floor
+//! * **6 to 10 letters** - the corpus bigram model mixed with a uniform floor
 //!   (`0.85 * bigram + 0.15 * uniform`), so rare pairs still occur,
-//! * **more than 10 letters** — the bigram model as it is.
+//! * **more than 10 letters** - the bigram model as it is.
 //!
 //! Generated words are 3–8 letters, never repeat a letter three times in a row,
 //! and never leave the unlocked ∩ reachable set. Everything is driven by the
-//! injected RNG, so a seeded `SmallRng` reproduces a lesson exactly — which is
+//! injected RNG, so a seeded `SmallRng` reproduces a lesson exactly - which is
 //! what makes the tests deterministic and a lesson replayable.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -446,7 +446,7 @@ fn index(rng: &mut impl Rng, n: usize) -> usize {
     }
 }
 
-/// A uniform `0.0..1.0` draw with 24 bits of resolution — enough for a lesson and
+/// A uniform `0.0..1.0` draw with 24 bits of resolution - enough for a lesson and
 /// independent of the RNG crate's sampling API.
 fn unit(rng: &mut impl Rng) -> f32 {
     f32::from((rng.next_u32() >> 8) as u16) / f32::from(1u16 << 8) / f32::from(1u16 << 8)

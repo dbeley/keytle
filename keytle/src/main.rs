@@ -129,7 +129,7 @@ fn restore_terminal() {
     let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
 }
 
-/// Restores the terminal when dropped — on success, on error, and on unwind.
+/// Restores the terminal when dropped - on success, on error, and on unwind.
 struct TerminalGuard {
     restored: bool,
 }
@@ -208,7 +208,7 @@ fn event_loop(
 }
 
 /// Apply one key event; `Ok(true)` means quit. Generic over the backend so the
-/// loop's decision — quit, or record and redraw — can be tested off a TTY.
+/// loop's decision - quit, or record and redraw - can be tested off a TTY.
 fn handle<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -278,8 +278,8 @@ fn layouts_list() {
 /// `keytle stats`: the dashboard as plain text, for a shell that is not running
 /// the TUI.
 ///
-/// Every number comes from `keytle_core::stats` — the same folds the dashboard
-/// draws — so the two views cannot disagree about a personal best.
+/// Every number comes from `keytle_core::stats` - the same folds the dashboard
+/// draws - so the two views cannot disagree about a personal best.
 fn stats_command(
     layout: Option<String>,
     lang: Option<String>,
@@ -349,7 +349,7 @@ fn stats_command(
 
 /// The line `stats` prints when nothing matched. An empty store is genuinely
 /// "no tests yet"; a filter that hides existing history is a different fact,
-/// so it names the filter and says how much history it is hiding — otherwise
+/// so it names the filter and says how much history it is hiding - otherwise
 /// the same `no tests yet` would contradict the dashboard, which shows the
 /// records the filter merely skipped.
 fn empty_history_line(filter: &Filter, total: usize) -> String {
@@ -434,14 +434,14 @@ fn reachability(config: &Config, layout_dir: &Path) -> String {
     }
     // The characters are named, and the reason is stated: a shared board shape
     // is not enough, because a legend the host has no level for can never be
-    // typed — Colemak-DH's altgr `é` on a qwerty host is the usual case.
+    // typed - Colemak-DH's altgr `é` on a qwerty host is the usual case.
     let chars: String = unreachable
         .iter()
         .map(|c| c.to_string())
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "reachability: {} -> {}: {} unreachable character{} ({chars}) — no host keystroke produces them at their level, so lessons skip them",
+        "reachability: {} -> {}: {} unreachable character{} ({chars}) - no host keystroke produces them at their level, so lessons skip them",
         config.host_layout,
         config.layout,
         unreachable.len(),

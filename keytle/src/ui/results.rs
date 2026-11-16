@@ -32,7 +32,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Weakest first, as the engine ranked them; the columns are wide so the
     // letters line up whatever their width.
     let weakest = if app.last_weak.is_empty() {
-        "—".to_string()
+        "-".to_string()
     } else {
         app.last_weak
             .iter()
@@ -210,7 +210,8 @@ mod tests {
             .lines()
             .find(|line| line.contains("confidence"))
             .unwrap_or_else(|| panic!("no verdict line:\n{text}"));
-        assert!(line.contains("0.70"), "the gate is named:\n{line}");
+        let gate = format!("{:.2}", keytle_core::engine::profile::UNLOCK_CONFIDENCE);
+        assert!(line.contains(&gate), "the gate is named:\n{line}");
         assert!(
             line.contains("0."),
             "the current confidence is named:\n{line}"

@@ -4,7 +4,7 @@
 //! pure function of its input events and every rule below can be tested without
 //! sleeping. The rules come straight from the design:
 //!
-//! * comparison is **exact** — `T` where `t` is expected is an [`Outcome::Miss`],
+//! * comparison is **exact** - `T` where `t` is expected is an [`Outcome::Miss`],
 //!   and in strict mode it does not advance the cursor either;
 //! * a wrong case is still an error for the session's accuracy, but it is *not*
 //!   charged to the letter: it lands in [`KeyAgg::shift_misses`], because the
@@ -21,7 +21,7 @@
 //!   backwards contributes nothing at all.
 //!
 //! Per-key aggregates are keyed by the *lowercase expected* character, so `T` and
-//! `t` feed one bucket — the same normalisation the progression engine uses. Inside
+//! `t` feed one bucket - the same normalisation the progression engine uses. Inside
 //! that bucket [`KeyAgg::hits`], [`KeyAgg::misses`] and [`KeyAgg::shift_misses`] are
 //! what the unlock rule reads.
 

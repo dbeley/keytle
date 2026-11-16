@@ -2,7 +2,7 @@
 //!
 //! `KeyStat` is deliberately tiny and serde-friendly: it is what the profile
 //! persists and what the unlock rule averages over. Two qualities are tracked
-//! separately and then mixed, because they fix different problems — a key can be
+//! separately and then mixed, because they fix different problems - a key can be
 //! hit reliably but slowly, or fast but sloppily:
 //!
 //! ```text
@@ -19,7 +19,7 @@
 //! A key with no data must not look perfect, so an untouched stat reports
 //! `accuracy() == 1.0` (nothing has gone wrong yet) but `confidence() == 0.0`
 //! (nothing has gone right either). Intervals are smoothed with an EMA rather
-//! than a plain mean so a single hitch — or a single brilliant burst — cannot
+//! than a plain mean so a single hitch - or a single brilliant burst - cannot
 //! swing a key's standing.
 
 use serde::{Deserialize, Serialize};

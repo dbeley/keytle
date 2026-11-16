@@ -2,8 +2,8 @@
 //!
 //! The on-disk formats are deliberately dumb so they can be edited by hand:
 //!
-//! * words — one `word frequency` pair per line, e.g. `the 22761659`,
-//! * sentences — one sentence per line.
+//! * words - one `word frequency` pair per line, e.g. `the 22761659`,
+//! * sentences - one sentence per line.
 //!
 //! Both formats tolerate a leading UTF-8 BOM and CRLF line endings, because
 //! hand-edited files on Windows will have them. Blank lines are skipped. A word

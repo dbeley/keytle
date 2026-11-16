@@ -1,6 +1,6 @@
 //! The progression engine: what the typist has earned, and what to practise next.
 //!
-//! The engine is pure and terminal-free — it turns keystrokes into state and state
+//! The engine is pure and terminal-free - it turns keystrokes into state and state
 //! into decisions, with no clock, no filesystem and no UI. Everything it needs from
 //! the outside arrives as an argument, which is what makes the unlock rules
 //! testable at the boundaries.

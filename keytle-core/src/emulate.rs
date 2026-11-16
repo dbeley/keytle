@@ -17,7 +17,7 @@
 //! when the host key at that position carries a legend *at the same level*, so a
 //! keystroke can actually produce it. Colemak-DH's altgr `é` is therefore
 //! unreachable from a bare qwerty host, whose key at that spot has no altgr
-//! legend — the alphabet a lesson may use is exactly what [`Emulator::translate`]
+//! legend - the alphabet a lesson may use is exactly what [`Emulator::translate`]
 //! can return, never more. [`Emulator::reachable`] still answers the purely
 //! positional question, which is what the board legend draws.
 
@@ -100,7 +100,7 @@ impl Emulator {
         &self.reachable
     }
 
-    /// Every target character a keystroke on the host can actually produce —
+    /// Every target character a keystroke on the host can actually produce -
     /// exactly the set [`Emulator::translate`] maps onto. This is the alphabet a
     /// lesson may ask for.
     pub fn reachable_chars(&self) -> BTreeSet<char> {
@@ -220,8 +220,8 @@ mod tests {
     fn qwerty_host_to_bepo_target_reaches_accents_by_position() {
         let e = emulator("qwerty", "bepo");
 
-        // bépo row 1 is "bépoè^vdljzwç", so é lives at (1, 1) — the key a
-        // qwerty board labels 'w' — and 'p' sits at (1, 2), where qwerty has 'e'.
+        // bépo row 1 is "bépoè^vdljzwç", so é lives at (1, 1) - the key a
+        // qwerty board labels 'w' - and 'p' sits at (1, 2), where qwerty has 'e'.
         assert_eq!(e.translate('w'), Some('é')); // (1, 1)
         assert_eq!(e.translate('e'), Some('p')); // (1, 2)
         assert_eq!(e.translate('a'), Some('a')); // (2, 0)
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(e.host_char_for('é'), Some('w'), "the legend subscript");
         assert_eq!(e.host_char_for('p'), Some('e'));
 
-        // Same board shape, so every position is pressable — and é, a *base*
+        // Same board shape, so every position is pressable - and é, a *base*
         // legend here, is genuinely typeable. bépo's altgr legends are not: a
         // qwerty host has no altgr level to reach them with.
         assert_eq!(e.reachable().len(), e.target().keys.len());

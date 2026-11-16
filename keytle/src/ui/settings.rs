@@ -2,7 +2,7 @@
 //!
 //! The panel is an overlay, not a screen of its own: it is drawn over the typing
 //! view, which stays visible around it, because a setting is changed to change
-//! the drill behind it — a layout or a mode is best judged with its keyboard in
+//! the drill behind it - a layout or a mode is best judged with its keyboard in
 //! sight. It draws [`SETTINGS_ROWS`] and whatever [`App::settings_values`]
 //! reports, so it can never show a value the app is not actually using: every
 //! change goes through the app's own cycling, which applies it to the live

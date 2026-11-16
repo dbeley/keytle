@@ -154,7 +154,7 @@ impl Config {
     /// The write is atomic, the way the profile's is: the TOML goes to
     /// `<path>.tmp` in the same directory, is flushed to disk, and only then is
     /// renamed over the target. Truncating in place would leave a crash with a
-    /// half-written file — that is, with no settings at all.
+    /// half-written file - that is, with no settings at all.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
         let text = toml::to_string(self).map_err(|err| ConfigError::Encode {
             path: path.to_path_buf(),

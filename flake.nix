@@ -1,5 +1,5 @@
 {
-  description = "keytle — a fast, offline TUI that teaches keyboard layouts";
+  description = "keytle - a fast, offline TUI that teaches keyboard layouts";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
