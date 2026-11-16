@@ -1,18 +1,21 @@
 mod app;
 mod ui;
 
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use crossterm::event::{self, Event, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::cursor;
-use keytle_core::config::Config;
+use keytle_core::config::{Config, Mode};
+use keytle_core::emulate::Emulator;
 use keytle_core::paths::{self, Paths};
+use keytle_core::stats::{self, Filter};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 
@@ -31,13 +34,48 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Print resolved paths, config, version and terminal type
+    /// Start the trainer (the default when no subcommand is given)
+    Run,
+    /// Print the progress dashboard as plain text
+    Stats {
+        /// Only count tests on this layout
+        #[arg(long)]
+        layout: Option<String>,
+        /// Only count tests in this language
+        #[arg(long)]
+        lang: Option<String>,
+        /// Only count tests in this mode: pseudo, words or sentences
+        #[arg(long)]
+        mode: Option<String>,
+        /// Summarise the newest N tests
+        #[arg(long, default_value_t = 20)]
+        last: usize,
+    },
+    /// Write the raw records out as JSONL or TSV
+    Export {
+        /// Which shape to write
+        #[arg(long, value_enum, default_value_t = ExportFormat::Jsonl)]
+        format: ExportFormat,
+        /// Write to a file instead of standard output
+        #[arg(short, long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+    /// Print resolved paths, config, version, terminal type and reachability
     Doctor,
     /// Inspect the available layouts
     Layouts {
         #[command(subcommand)]
         command: LayoutsCommand,
     },
+}
+
+/// The shapes `keytle export` can write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExportFormat {
+    /// One JSON record per line, exactly as stored
+    Jsonl,
+    /// A header row and one row per record, for spreadsheets
+    Tsv,
 }
 
 #[derive(Subcommand)]
@@ -48,17 +86,29 @@ enum LayoutsCommand {
 
 fn main() {
     let cli = Cli::parse();
-    match cli.command {
-        Some(Command::Doctor) => doctor(),
+    let result = match cli.command {
+        Some(Command::Doctor) => {
+            doctor();
+            Ok(())
+        }
         Some(Command::Layouts {
             command: LayoutsCommand::List,
-        }) => layouts_list(),
-        None => {
-            if let Err(err) = run_tui() {
-                eprintln!("error: {err}");
-                std::process::exit(1);
-            }
+        }) => {
+            layouts_list();
+            Ok(())
         }
+        Some(Command::Stats {
+            layout,
+            lang,
+            mode,
+            last,
+        }) => stats_command(layout, lang, mode.as_deref(), last),
+        Some(Command::Export { format, output }) => export_command(format, output.as_deref()),
+        None | Some(Command::Run) => run_tui(),
+    };
+    if let Err(err) = result {
+        eprintln!("error: {err}");
+        std::process::exit(1);
     }
 }
 
@@ -188,9 +238,16 @@ fn doctor() {
         }
     };
     let term = std::env::var_os("TERM").map(|term| term.to_string_lossy().into_owned());
+    let reach = reachability(&config, &dirs.layouts_dir());
     print!(
         "{}",
-        render(&dirs, &config, env!("CARGO_PKG_VERSION"), term.as_deref())
+        render(
+            &dirs,
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            term.as_deref(),
+            &reach
+        )
     );
 }
 
@@ -212,8 +269,137 @@ fn layouts_list() {
     }
 }
 
+/// `keytle stats`: the dashboard as plain text, for a shell that is not running
+/// the TUI.
+///
+/// Every number comes from `keytle_core::stats` — the same folds the dashboard
+/// draws — so the two views cannot disagree about a personal best.
+fn stats_command(
+    layout: Option<String>,
+    lang: Option<String>,
+    mode: Option<&str>,
+    last: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mode = match mode {
+        Some(text) => Some(parse_mode(text).ok_or_else(|| {
+            format!("unknown mode \"{text}\": try pseudo, words or sentences")
+        })?),
+        None => None,
+    };
+    let dirs = paths::paths();
+    let records = stats::read_all(&dirs.tests_file())?;
+    let filter = Filter { layout, lang, mode };
+    if !records.iter().any(|rec| filter.matches(rec)) {
+        println!("no tests yet");
+        return Ok(());
+    }
+    let window = last.max(1);
+    let points = stats::series(&records, &filter);
+    let speed: Vec<f32> = points.iter().map(|point| point.wpm).collect();
+    let recent = &points[points.len().saturating_sub(window)..];
+    let accuracy = recent.iter().map(|point| point.accuracy).sum::<f32>() / recent.len() as f32;
+    let best = stats::personal_best(&records, &filter).unwrap_or(0.0);
+    let config = Config::load(&dirs.config_file())?;
+    let keys = stats::key_rows(&records, &filter, window, config.target_interval_ms());
+
+    println!("{:<12} {}", "tests", points.len());
+    println!("{:<12} {:.0}", "latest wpm", speed.last().copied().unwrap_or(0.0));
+    println!("{:<12} {best:.0}", "best wpm");
+    println!("{:<12} {:.1}%", "accuracy", accuracy * 100.0);
+    println!("{:<12} {:.1}/5", "consistency", stats::consistency(&speed));
+    println!("weakest keys");
+    if keys.is_empty() {
+        println!("  (no per-key data)");
+    }
+    for row in keys.iter().take(5) {
+        println!(
+            "  {:<3} {:>5.1}% accuracy  conf {:.2}",
+            row.ch,
+            row.accuracy * 100.0,
+            row.confidence
+        );
+    }
+    Ok(())
+}
+
+/// The config file's spelling of a mode, or `None` for anything else.
+fn parse_mode(text: &str) -> Option<Mode> {
+    match text {
+        "pseudo" => Some(Mode::Pseudo),
+        "words" => Some(Mode::Words),
+        "sentences" => Some(Mode::Sentences),
+        _ => None,
+    }
+}
+
+/// `keytle export`: the raw history, to stdout or to a file.
+fn export_command(
+    format: ExportFormat,
+    output: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dirs = paths::paths();
+    let records = stats::read_all(&dirs.tests_file())?;
+    let text = match format {
+        ExportFormat::Jsonl => stats::export_jsonl(&records)?,
+        ExportFormat::Tsv => stats::export_tsv(&records),
+    };
+    match output {
+        Some(path) => {
+            if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, text)?;
+        }
+        None => {
+            let mut stdout = io::stdout().lock();
+            stdout.write_all(text.as_bytes())?;
+            stdout.flush()?;
+        }
+    }
+    Ok(())
+}
+
+/// For the configured (host, target) pair: how many target positions the host
+/// board cannot press, and the characters sitting on them.
+fn reachability(config: &Config, layout_dir: &Path) -> String {
+    let load = |id: &str| keytle_core::layouts::load(id, layout_dir);
+    let (Ok(host), Ok(target)) = (load(&config.host_layout), load(&config.layout)) else {
+        return format!(
+            "reachability: {} -> {}: cannot load both layouts",
+            config.host_layout, config.layout
+        );
+    };
+    let emulator = Emulator::new(host, target);
+    let missing = emulator.target().keys.len() - emulator.reachable().len();
+    if missing == 0 {
+        format!(
+            "reachability: {} -> {}: all positions reachable",
+            config.host_layout, config.layout
+        )
+    } else {
+        let chars: String = emulator
+            .unreachable_chars()
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(
+            "reachability: {} -> {}: {missing} unreachable position{} ({chars})",
+            config.host_layout,
+            config.layout,
+            if missing == 1 { "" } else { "s" }
+        )
+    }
+}
+
 /// The `doctor` report, kept pure so its format can be checked by tests.
-fn render(dirs: &Paths, config: &Config, version: &str, term: Option<&str>) -> String {
+fn render(
+    dirs: &Paths,
+    config: &Config,
+    version: &str,
+    term: Option<&str>,
+    reachability: &str,
+) -> String {
     let mut out = format!(
         "keytle {version}\n\
          config dir:  {}\n\
@@ -234,6 +420,9 @@ fn render(dirs: &Paths, config: &Config, version: &str, term: Option<&str>) -> S
     out.push_str(&format!("  strict = {}\n", config.strict));
     out.push_str(&format!("  lesson_words = {}\n", config.lesson_words));
     out.push_str(&format!("  target_wpm = {}\n", config.target_wpm));
+    out.push('\n');
+    out.push_str(reachability);
+    out.push('\n');
     out
 }
 
@@ -254,7 +443,7 @@ mod tests {
 
     #[test]
     fn doctor_report_names_version_paths_and_term() {
-        let out = render(&dirs(), &Config::default(), "0.1.0", Some("xterm-kitty"));
+        let out = render(&dirs(), &Config::default(), "0.1.0", Some("xterm-kitty"), "reachability: test line");
         assert!(out.contains("keytle 0.1.0"), "{out}");
         assert!(out.contains("/cfg/keytle"), "{out}");
         assert!(out.contains("/data/keytle"), "{out}");
@@ -267,8 +456,49 @@ mod tests {
 
     #[test]
     fn doctor_report_marks_a_missing_term() {
-        let out = render(&dirs(), &Config::default(), "0.1.0", None);
+        let out = render(&dirs(), &Config::default(), "0.1.0", None, "reachability: test line");
         assert!(out.contains("TERM:        (unset)"), "{out}");
+    }
+
+    #[test]
+    fn reachability_names_the_unreachable_characters() {
+        // azerty has no key at (3, 6), where colemak-dh puts 'h'.
+        let config = Config {
+            host_layout: "azerty".to_string(),
+            layout: "colemak-dh".to_string(),
+            ..Config::default()
+        };
+        let line = reachability(&config, &empty_layout_dir());
+        assert!(line.contains("reachability:"), "{line}");
+        assert!(line.contains("1 unreachable position"), "{line}");
+        assert!(line.contains('h'), "the characters are named: {line}");
+
+        let identical = Config {
+            host_layout: "qwerty".to_string(),
+            layout: "colemak-dh".to_string(),
+            ..Config::default()
+        };
+        assert!(
+            reachability(&identical, &empty_layout_dir()).contains("all positions reachable"),
+            "a shared board shape reaches everything"
+        );
+    }
+
+    /// A layout directory that does not exist, so only the bundled layouts load.
+    fn empty_layout_dir() -> PathBuf {
+        PathBuf::from("/nonexistent/keytle/layouts")
+    }
+
+    #[test]
+    fn doctor_report_carries_the_reachability_line() {
+        let out = render(
+            &dirs(),
+            &Config::default(),
+            "0.1.0",
+            None,
+            "reachability: qwerty -> colemak-dh: all positions reachable",
+        );
+        assert!(out.contains("reachability: qwerty -> colemak-dh"), "{out}");
     }
 
     #[test]
@@ -279,7 +509,7 @@ mod tests {
             target_wpm: 60.0,
             ..Config::default()
         };
-        let out = render(&dirs(), &config, "0.1.0", Some("xterm-kitty"));
+        let out = render(&dirs(), &config, "0.1.0", Some("xterm-kitty"), "reachability: test line");
         assert!(out.contains("config:\n  layout = \"workman\"\n"), "{out}");
         assert!(out.contains("  mode = \"words\"\n"), "{out}");
         assert!(out.contains("  target_wpm = 60\n"), "{out}");
