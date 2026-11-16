@@ -84,6 +84,9 @@ is used by the next lesson.
   then the home row and the remaining rows key by key, then punctuation and (for
   `fr`) the accented letters. Every unlock is automatic: there is no key that
   skips ahead, so the profile can never hold a letter the lessons did not earn.
+* Letters are weighted by weakness, and a letter whose recent accuracy sits under
+  the floor gets a large extra share: the one thing standing between you and the
+  next unlock shows up in most words instead of once in a while.
 * Lessons are **real dictionary words** (`words` mode) unless the settings say
   otherwise: the bundled lists are filtered against a real lexicon, so what you
   type is English or French rather than generated text. `pseudo` still exists

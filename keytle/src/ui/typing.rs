@@ -241,8 +241,9 @@ fn render_home(frame: &mut Frame, area: Rect, app: &App) {
         };
         lines.push(home_row("weakest", weak, Color::Yellow));
     }
+    // The line names itself, so it gets the full width rather than a label.
     lines.push(home_row(
-        "next unlock",
+        "",
         unlock_line(&app.unlock_outcome()),
         Color::Green,
     ));
@@ -285,8 +286,15 @@ fn render_home(frame: &mut Frame, area: Rect, app: &App) {
 
 /// A `label  value` line for the home panel, centred like the rest of it.
 fn home_row(label: &str, value: String, color: Color) -> Line<'static> {
+    // An empty label means the value names its own subject, which is what the
+    // unlock line does ("next unlock: r - ...").
+    let prefix = if label.is_empty() {
+        String::new()
+    } else {
+        format!("{label}  ")
+    };
     Line::from(vec![
-        Span::styled(format!("{label}  "), Style::new().fg(Color::DarkGray)),
+        Span::styled(prefix, Style::new().fg(Color::DarkGray)),
         Span::styled(value, Style::new().add_modifier(Modifier::BOLD).fg(color)),
     ])
 }

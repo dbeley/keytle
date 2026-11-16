@@ -3,7 +3,11 @@
 //! The generator's job is to fill a lesson with letters the typist has unlocked
 //! *and* can actually press, weighted towards the letters that are still shaky.
 //! Confidence buys a letter a lower chance of appearing (`w = 0.15 + 1 - conf`),
-//! so a lesson quietly turns into a drill of whatever is not yet fluent.
+//! and a letter whose recent accuracy is under the unlock floor earns a bonus on
+//! top ([`SLOPPY_WEIGHT`]): confidence alone would let a fast but error-prone key
+//! hide behind its speed while it quietly blocks every unlock. A lesson therefore
+//! turns into a drill of whatever is not yet fluent *and* of whatever is standing
+//! between the typist and the next letter.
 //!
 //! Pseudo-words come from three generators, because a bigram model trained on a
 //! real language has almost no mass left once the alphabet is four letters:
@@ -24,6 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rand::Rng;
 
 use super::key::KeyStat;
+use super::profile::UNLOCK_ACCURACY;
 use crate::config::Mode;
 use crate::corpus::Corpus;
 use crate::layout::Layout;
@@ -39,6 +44,13 @@ const MIN_WORD_LEN: usize = 3;
 const MAX_WORD_LEN: usize = 8;
 /// A mastered letter is still drilled at this share of a shaky one's weight.
 const WEIGHT_FLOOR: f32 = 0.15;
+/// Extra weight a key earns while its recent accuracy sits at or under the
+/// unlock floor. Confidence alone would let a fast but sloppy letter hide: it
+/// can be confident enough for the mean and still block every unlock, so the
+/// lesson has to bring it back on its own.
+const SLOPPY_WEIGHT: f32 = 1.0;
+/// How far above the floor a key climbs before that extra weight is gone.
+const SLOPPY_BAND: f32 = 0.05;
 /// `words` mode needs this many typable corpus words before it is worth using.
 ///
 /// Deliberately low: a four-letter alphabet leaves only a dozen real words in a
@@ -452,13 +464,18 @@ fn unit(rng: &mut impl Rng) -> f32 {
     f32::from((rng.next_u32() >> 8) as u16) / f32::from(1u16 << 8) / f32::from(1u16 << 8)
 }
 
-/// How much a letter deserves to be drilled: `w = 0.15 + (1 - confidence)`, so a
-/// perfect key still appears occasionally and an untouched one appears most.
+/// How much a letter deserves to be drilled: `w = 0.15 + (1 - confidence)` plus
+/// a bonus while its recent accuracy is under the unlock floor, so a perfect key
+/// still appears occasionally, an untouched one appears most, and a key that is
+/// the only thing between the typist and the next unlock appears nearly as often
+/// as the two together.
 fn letter_weight(ch: char, keys: &BTreeMap<char, KeyStat>) -> f32 {
-    let confidence = keys
-        .get(&ch)
-        .map_or(0.0, |stat| stat.confidence(CONFIDENCE_TARGET_MS));
-    WEIGHT_FLOOR + (1.0 - confidence)
+    let Some(stat) = keys.get(&ch) else {
+        return WEIGHT_FLOOR + 1.0;
+    };
+    let confidence = stat.confidence(CONFIDENCE_TARGET_MS);
+    let sloppy = ((UNLOCK_ACCURACY + SLOPPY_BAND - stat.accuracy()) / SLOPPY_BAND).clamp(0.0, 1.0);
+    WEIGHT_FLOOR + (1.0 - confidence) + SLOPPY_WEIGHT * sloppy
 }
 
 /// A letter's weight, by alphabet order (the pool is built from a sorted set).
@@ -595,6 +612,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_sloppy_key_earns_extra_weight_and_words_carrying_it_score_higher() {
+        let mut keys = BTreeMap::new();
+        for ch in "bcdef".chars() {
+            keys.insert(
+                ch,
+                KeyStat {
+                    hits: 100,
+                    misses: 0,
+                    shift_misses: 0,
+                    mean_interval_ms: 150.0,
+                    accuracy_ema: None,
+                },
+            );
+        }
+        keys.insert(
+            'a',
+            KeyStat {
+                hits: 60,
+                misses: 40,
+                shift_misses: 0,
+                // Fast, so confidence alone would rank it above the clean keys.
+                mean_interval_ms: 150.0,
+                accuracy_ema: None,
+            },
+        );
+        let clean = letter_weight('b', &keys);
+        let sloppy = letter_weight('a', &keys);
+        assert!(
+            sloppy > clean * 5.0,
+            "the sloppy key must stand out: {sloppy} vs {clean}"
+        );
+        // The word scorer is what the words mode picks with.
+        let with = word_score("dat", 100, &keys);
+        let without = word_score("det", 100, &keys);
+        assert!(
+            with > without,
+            "a word carrying it scores {with} vs {without}"
+        );
     }
 
     #[test]

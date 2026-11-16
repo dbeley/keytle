@@ -87,26 +87,31 @@ pub fn metric_line(label: &str, value: String) -> Line<'static> {
 }
 
 /// The engine's verdict in one line a learner can act on: which letter is next
-/// and, when blocked, exactly how far short it is.
+/// and, when blocked, the one thing that stands in the way and what to do about
+/// it - a name and a number, not a score to interpret.
 ///
 /// The thresholds come from the engine's own constants, never a copy, so the
 /// message cannot drift from the rule it describes.
 pub fn unlock_line(outcome: &UnlockOutcome) -> String {
     let Some(ch) = outcome.next else {
-        return "every letter is unlocked".to_string();
+        return "every letter is unlocked - the drill now stays on them".to_string();
     };
     match outcome.verdict {
-        Verdict::Unlock(_) => format!("{ch} - ready: finishes with an unlock"),
+        Verdict::Unlock(_) => {
+            format!("next unlock: {ch} - finish this lesson and it is yours")
+        }
         Verdict::Blocked(BlockReason::LowConfidence(mean)) => format!(
-            "{ch} - {mean:.2} of {:.2} confidence",
+            "next unlock: {ch} - raise average confidence to {:.2} (now {mean:.2})",
             keytle_core::engine::profile::UNLOCK_CONFIDENCE
         ),
         Verdict::Blocked(BlockReason::Accuracy(key, accuracy)) => format!(
-            "{ch} - {key} is at {:.0}% accuracy lately, {:.0}% is the floor",
-            accuracy * 100.0,
-            keytle_core::engine::profile::UNLOCK_ACCURACY * 100.0
+            "next unlock: {ch} - get {key} to {:.0}% accuracy (now {:.0}%)",
+            keytle_core::engine::profile::UNLOCK_ACCURACY * 100.0,
+            accuracy * 100.0
         ),
-        Verdict::Blocked(BlockReason::NoNextKey) => "every letter is unlocked".to_string(),
+        Verdict::Blocked(BlockReason::NoNextKey) => {
+            "every letter is unlocked - the drill now stays on them".to_string()
+        }
     }
 }
 
@@ -208,6 +213,41 @@ mod tests {
         );
         assert!(text.contains("config.toml"), "{text}");
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_unlock_line_names_the_letter_and_the_one_obstacle() {
+        use keytle_core::engine::profile::{BlockReason, Verdict};
+
+        let ready = UnlockOutcome {
+            next: Some('r'),
+            verdict: Verdict::Unlock('r'),
+            mean: Some(0.9),
+        };
+        assert_eq!(
+            unlock_line(&ready),
+            "next unlock: r - finish this lesson and it is yours"
+        );
+
+        let sloppy = UnlockOutcome {
+            next: Some('r'),
+            verdict: Verdict::Blocked(BlockReason::Accuracy('n', 0.84)),
+            mean: Some(0.7),
+        };
+        assert_eq!(
+            unlock_line(&sloppy),
+            "next unlock: r - get n to 90% accuracy (now 84%)"
+        );
+
+        let slow = UnlockOutcome {
+            next: Some('r'),
+            verdict: Verdict::Blocked(BlockReason::LowConfidence(0.42)),
+            mean: Some(0.42),
+        };
+        assert_eq!(
+            unlock_line(&slow),
+            "next unlock: r - raise average confidence to 0.60 (now 0.42)"
+        );
     }
 
     #[test]

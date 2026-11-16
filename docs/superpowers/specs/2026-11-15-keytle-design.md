@@ -302,7 +302,10 @@ Lesson generation, three modes:
 
 - **pseudo** (default, keybr-like): random words of length 3–8 built from a letter
   bigram model derived at load time from the corpus wordlist, restricted to *unlocked ∩
-  reachable*, with per-letter inclusion weight `w = 0.15 + (1 - confidence)`, resampled
+  reachable*, with per-letter inclusion weight `w = 0.15 + (1 - confidence) + sloppy`,
+  where `sloppy = 1.0` while the key's recent accuracy is at or under the unlock floor
+  (ramping to 0 over the next five points), so the letter blocking the next unlock is
+  drilled hard rather than merely often, resampled
   to avoid the same letter three times in a row. **Backoff ladder** for tiny alphabets,
   because real bigram mass vanishes there and naive generation produces `fjfjfj`:
   1. fewer than 6 unlocked letters → vowel/consonant templates (`CVC`, `VCVC`, `CVCVC`),
