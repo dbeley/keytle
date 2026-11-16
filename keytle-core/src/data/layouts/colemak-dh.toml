@@ -387,4 +387,6 @@ shift = " "
 finger = "thumb"
 
 [unlock_order]
-default = ["t", "n", "s", "e", "r", "i", "a", "o"]
+default = ["t", "n", "s", "e", "r", "i", "a", "o", "g", "m", "q", "w", "f", "p", "b", "j", "l", "u", "y", "z", "x", "c", "d", "v", "k", "h"]
+en = ["e", "t", "a", "o", "i", "n", "s", "h", "r", "g", "m", "q", "w", "f", "p", "b", "j", "l", "u", "y", "z", "x", "c", "d", "v", "k"]
+fr = ["e", "s", "a", "i", "t", "n", "r", "u", "o", "g", "m", "q", "w", "f", "p", "b", "j", "l", "y", "z", "x", "c", "d", "v", "k", "h"]

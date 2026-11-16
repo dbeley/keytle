@@ -255,9 +255,16 @@ mod tests {
             Some(Position::new(2, 3)),
             "the home key under the left index"
         );
+        // Frequency first, so English words form from the first lesson, then the
+        // layout's own home-row walk, then the remaining letters by row.
+        let order = layout.unlock_order_for("en");
+        assert_eq!(&order[..8], &['e', 't', 'a', 'o', 'i', 'n', 's', 'h']);
         assert_eq!(
-            layout.unlock_order_for("en"),
-            ['f', 'j', 'd', 'k', 's', 'l', 'a', ';']
+            &order[8..],
+            &[
+                'f', 'j', 'd', 'k', 'l', ';', 'g', 'q', 'w', 'r', 'y', 'u', 'p', 'z', 'x', 'c',
+                'v', 'b', 'm'
+            ]
         );
     }
 
@@ -276,10 +283,18 @@ mod tests {
         let comma = layout.key_at(Position::new(3, 7)).expect("the comma key");
         assert_eq!(comma.base, ',');
         assert_eq!(comma.shift, Some('?'), "AZERTY puts ? on shift-comma");
-        assert_eq!(layout.unlock_order_for("fr"), ['é', 'è', 'à', 'ç', 'ù']);
+        // French starts on French letters, and the order still covers all of
+        // them, accents included: a language array is an order, not a list of
+        // extras bolted on the end.
         assert_eq!(
-            layout.unlock_order_for("en"),
-            ['q', 's', 'd', 'f', 'g', 'h', 'j', 'k']
+            &layout.unlock_order_for("fr")[..8],
+            &['e', 's', 'a', 'i', 't', 'n', 'r', 'u']
+        );
+        assert!(layout.unlock_order_for("fr").contains(&'é'));
+        assert!(layout.unlock_order_for("fr").contains(&'à'));
+        assert_eq!(
+            &layout.unlock_order_for("en")[..8],
+            &['e', 't', 'a', 'o', 'i', 'n', 's', 'h']
         );
     }
 
@@ -319,7 +334,9 @@ mod tests {
             .key_at(Position::new(2, 3))
             .expect("e on the home row");
         assert_eq!(e.altgr, Some('€'), "bépo's altgr euro");
-        assert_eq!(layout.unlock_order_for("fr"), ['é', 'è', 'à', 'ç', 'ù']);
+        let order = layout.unlock_order_for("fr");
+        assert_eq!(&order[..8], &['e', 's', 'a', 'i', 't', 'n', 'r', 'u']);
+        assert!(['é', 'è', 'à', 'ç'].iter().all(|ch| order.contains(ch)));
     }
 
     #[test]
