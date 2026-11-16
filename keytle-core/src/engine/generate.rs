@@ -597,6 +597,35 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_qwerty_profile_drills_real_words() {
+        // The point of the frequency-first teaching order: QWERTY and AZERTY
+        // home rows have almost no vowels, so their first lessons were gibberish
+        // even in words mode. A fresh English profile starts on e t a o.
+        let src = crate::layouts::bundled_source("qwerty").expect("bundled layout");
+        let layout = Layout::from_toml(src).expect("valid bundled layout");
+        let unlocked: BTreeSet<char> = layout.unlock_order_for("en").into_iter().take(4).collect();
+        assert_eq!(unlocked, chars("etao"));
+        let lesson = generate(
+            &layout,
+            &en(),
+            "en",
+            &BTreeMap::new(),
+            &unlocked,
+            &unlocked,
+            Mode::Words,
+            20,
+            &mut rng(7),
+        );
+        assert_eq!(
+            lesson.note, None,
+            "real words, not pseudo: {:?}",
+            lesson.text
+        );
+        assert_eq!(lesson.words, 20);
+        assert_inside(&lesson.text, &unlocked);
+    }
+
+    #[test]
     fn four_letters_produce_template_words_of_a_sane_length() {
         let allowed = chars("tnse");
         let lesson = generate(
