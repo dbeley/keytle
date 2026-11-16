@@ -4,7 +4,7 @@
 //! yields a usable setup. Unknown keys are rejected rather than ignored, so a
 //! typo like `targt_wpm` fails loudly instead of being silently dropped.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// What the drill is made of. Written lowercase in the file: `pseudo`, `words`
 /// or `sentences`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Pseudo,

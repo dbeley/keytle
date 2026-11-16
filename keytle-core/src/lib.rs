@@ -10,4 +10,5 @@ pub mod engine;
 pub mod layout;
 pub mod layouts;
 pub mod paths;
+pub mod stats;
 pub mod typing;
