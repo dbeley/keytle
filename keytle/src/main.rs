@@ -288,9 +288,13 @@ fn stats_command(
     };
     let dirs = paths::paths();
     let records = stats::read_all(&dirs.tests_file())?;
-    let filter = Filter { layout, lang, mode };
+    let filter = Filter {
+        layout,
+        lang,
+        mode,
+    };
     if !records.iter().any(|rec| filter.matches(rec)) {
-        println!("no tests yet");
+        println!("{}", empty_history_line(&filter, records.len()));
         return Ok(());
     }
     let window = last.max(1);
@@ -320,6 +324,36 @@ fn stats_command(
         );
     }
     Ok(())
+}
+
+/// The line `stats` prints when nothing matched. An empty store is genuinely
+/// "no tests yet"; a filter that hides existing history is a different fact,
+/// so it names the filter and says how much history it is hiding — otherwise
+/// the same `no tests yet` would contradict the dashboard, which shows the
+/// records the filter merely skipped.
+fn empty_history_line(filter: &Filter, total: usize) -> String {
+    if total == 0 {
+        return "no tests yet".to_string();
+    }
+    let mut active: Vec<String> = Vec::new();
+    if let Some(layout) = &filter.layout {
+        active.push(format!("layout {layout}"));
+    }
+    if let Some(lang) = &filter.lang {
+        active.push(format!("language {lang}"));
+    }
+    if let Some(mode) = filter.mode {
+        active.push(format!("mode {mode}"));
+    }
+    let mut line = String::from("no tests match this filter");
+    if !active.is_empty() {
+        line.push_str(&format!(" ({})", active.join(", ")));
+    }
+    line.push_str(&format!(
+        "; {total} test{} recorded for other layouts/languages/modes",
+        if total == 1 { "" } else { "s" }
+    ));
+    line
 }
 
 /// The config file's spelling of a mode, or `None` for anything else.

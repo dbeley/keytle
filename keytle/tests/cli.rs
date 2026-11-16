@@ -41,6 +41,15 @@ impl Scratch {
         path
     }
 
+    /// Write a `tests.jsonl` of one well-formed v1 record.
+    fn one_record(&self) -> PathBuf {
+        let path = self.data().join("tests.jsonl");
+        std::fs::create_dir_all(self.data()).expect("the data dir");
+        let first = FIXTURE.lines().next().expect("the first fixture record");
+        std::fs::write(&path, format!("{first}\n")).expect("the fixture");
+        path
+    }
+
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_keytle"))
             .args(args)
@@ -103,6 +112,64 @@ fn stats_summarises_a_fixture() {
     assert!(text.contains("tests        2"), "{text}");
     assert!(text.contains("best wpm     48"), "{text}");
     assert!(text.contains("consistency"), "{text}");
+}
+
+#[test]
+fn stats_with_a_filter_that_matches_nothing_does_not_claim_the_history_is_empty() {
+    let scratch = Scratch::new("stats-nomatch");
+    scratch.one_record();
+    let out = scratch.run(&["stats", "--mode", "sentences"]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "stats failed:\n{text}");
+    assert!(
+        text.contains("no tests match this filter"),
+        "not the empty-store message:\n{text}"
+    );
+    assert!(text.contains("mode sentences"), "the filter is named:\n{text}");
+    assert!(
+        text.contains("1 test recorded for other layouts/languages/modes"),
+        "the hidden history is counted:\n{text}"
+    );
+    assert!(!text.contains("no tests yet"), "{text}");
+    assert!(!text.contains("tests        0"), "{text}");
+}
+
+#[test]
+fn export_jsonl_round_trips_both_fixture_records() {
+    let scratch = Scratch::new("export-jsonl");
+    scratch.two_records();
+    let out = scratch.run(&["export", "--format", "jsonl"]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "export failed:\n{text}");
+    assert_eq!(text.lines().count(), 2, "one object per record:\n{text}");
+    assert!(
+        text.lines().all(|line| line.starts_with('{')),
+        "one JSON object per line:\n{text}"
+    );
+    // Round-trip through the same reader the app uses, so each exported line
+    // has to be a complete, well-formed record — not merely valid JSON.
+    let path = scratch.base.join("roundtrip.jsonl");
+    std::fs::write(&path, &text).expect("the exported text");
+    let parsed = keytle_core::stats::read_all(&path).expect("every exported line parses");
+    assert_eq!(parsed.len(), 2, "both records survive:\n{text}");
+    let wpms: Vec<f32> = parsed.iter().map(|rec| rec.wpm).collect();
+    assert_eq!(wpms, vec![40.0, 48.0], "{text}");
+    assert!(
+        parsed.iter().all(|rec| rec.layout == "colemak-dh"),
+        "{text}"
+    );
+}
+
+#[test]
+fn doctor_reports_a_reachable_default_pair() {
+    let scratch = Scratch::new("doctor-reach");
+    let out = scratch.run(&["doctor"]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "doctor failed:\n{text}");
+    assert!(
+        text.contains("reachability: qwerty -> colemak-dh: all positions reachable"),
+        "the default pair reaches every position:\n{text}"
+    );
 }
 
 #[test]
