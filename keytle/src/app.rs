@@ -356,6 +356,13 @@ impl App {
                     self.start_lesson(now_ms);
                     return Action::StartLesson;
                 }
+                // `space` is the second way into a lesson here, and like `enter`
+                // it is a way in rather than a keystroke: starting the drill must
+                // not charge the space to the first letter as a miss.
+                KeyCode::Char(' ') if self.screen == Screen::Results => {
+                    self.start_lesson(now_ms);
+                    return Action::StartLesson;
+                }
                 // On the results screen a letter is the next lesson's first
                 // keystroke: the drill continues without a trip through a menu,
                 // and `s`/`?` keep their own meanings below.
@@ -395,12 +402,16 @@ impl App {
                 self.open_settings();
                 Action::Redraw
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.type_char(c, now_ms)
-            }
+            // The ways into a lesson come before the catch-all character arm:
+            // `space` is a second `enter`, and reaching `type_char` with it would
+            // start the lesson *and* charge the space to the first letter as a
+            // miss. Anything else is a keystroke for the lesson that is running.
             KeyCode::Enter | KeyCode::Char(' ') if self.is_idle() => {
                 self.start_lesson(now_ms);
                 Action::StartLesson
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.type_char(c, now_ms)
             }
             _ => {
                 if let Some(session) = &mut self.session {
@@ -1318,6 +1329,59 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), 20),
             Action::Quit
         );
+    }
+
+    #[test]
+    fn space_on_the_idle_screen_starts_a_lesson_and_charges_nothing() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        assert!(app.is_idle());
+        let action = app.handle_key(key(KeyCode::Char(' ')), 0);
+        assert_eq!(action, Action::StartLesson);
+        assert!(app.session.is_some(), "the lesson is running");
+        assert_eq!(
+            app.session.as_ref().unwrap().cursor(),
+            0,
+            "the space is the way in, not the first keystroke"
+        );
+        assert!(app.last_miss.is_none());
+        assert_eq!(
+            app.stats().unwrap().accuracy,
+            1.0,
+            "nothing has been typed yet, so nothing has gone wrong"
+        );
+    }
+
+    #[test]
+    fn space_on_the_results_screen_starts_the_next_lesson_and_charges_nothing() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        finish_one_lesson(&mut app, 0);
+        let action = app.handle_key(key(KeyCode::Char(' ')), 20_000);
+        assert_eq!(action, Action::StartLesson);
+        assert_eq!(app.session.as_ref().unwrap().cursor(), 0);
+        assert!(app.last_miss.is_none());
+    }
+
+    #[test]
+    fn a_space_inside_a_lesson_is_still_a_keystroke() {
+        let scratch = Scratch::new();
+        let mut app = app(&scratch);
+        app.config.emulate = false;
+        // A lesson whose first space is early: typing the space has to be scored
+        // like any other character, so the idle-only shortcut cannot swallow it.
+        app.start_lesson(0);
+        let text = app.lesson.as_ref().unwrap().text.clone();
+        let upto = text.find(' ').expect("a lesson of words has a space") + 1;
+        for (i, ch) in text.chars().take(upto).enumerate() {
+            app.handle_key(key(KeyCode::Char(ch)), 100 + i as u64);
+        }
+        assert_eq!(
+            app.session.as_ref().unwrap().cursor(),
+            upto,
+            "the space advanced the cursor"
+        );
+        assert!(app.last_miss.is_none());
     }
 
     #[test]
