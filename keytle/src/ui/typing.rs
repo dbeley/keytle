@@ -537,6 +537,22 @@ mod tests {
     }
 
     #[test]
+    fn a_long_lesson_wraps_and_keeps_its_last_word() {
+        let (_scratch, mut app) = app();
+        // Three rows' worth at 120 columns: the tail has to come back on the
+        // next rows instead of being clipped at the right edge.
+        let text = "castle start can told lion into than stones she deacon cannot silence \
+                    tattoo recess the thor coal silence and then the theatre and the dean \
+                    and the cardinal and the scarlet and the solution and the carrot and \
+                    the zebra";
+        app.session = Some(keytle_core::typing::TypingSession::new(text, true, 0));
+        let screen = draw(&app, 120, 26);
+        for word in ["castle", "theatre", "carrot", "zebra"] {
+            assert!(screen.contains(word), "{word} is drawn:\n{screen}");
+        }
+    }
+
+    #[test]
     fn the_idle_screen_invites_a_lesson_and_names_the_ways_in() {
         let (_scratch, app) = app();
         let screen = draw(&app, 100, 30);
