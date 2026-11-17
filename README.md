@@ -1,110 +1,57 @@
 # keytle
 
-Teach yourself a keyboard layout from the terminal - offline, no account, no
-browser. One binary drills you key by key, keybr-style: you start from four
-home-row letters, and a new letter unlocks only once the ones you own are fast
-and accurate. Run `keytle` in any terminal; it needs no network.
+keytle is a TUI utility to help you to learn a new keyboard layout and track your progress over time.
 
-## Emulation: learn a layout you never installed
+- Support for multiple layouts (qwerty, azerty, bépo, colemak-dh, gallium, + your own!)
+- Stats and charts to track your progress
+- Learning algorithm that increase difficulty and unlock new letters as you learn the keyboard layout
+- Emulate keyboard layouts to test uncommon layouts witout having to install it on your operating system
+- English and French dictionary
 
-You keep typing on the board you already have. A terminal reports the character
-your *host* layout produces, not the physical key, so keytle looks that character
-up on the host board to recover the pressed position and reads the target layout
-there: `e` on QWERTY counts as `f` under Colemak-DH, both sitting at `(1, 2)`.
-No system remap, no reboot.
+![keytle mid-lesson: the words to type above, the board below with the next key
+highlighted](docs/screenshots/typing.png)
 
-Characters the host cannot produce at the same *level* are unreachable - Colemak-
-DH's AltGr `é` has no QWERTY keystroke - so lessons and the unlock rule skip them
-rather than block progress forever. `keytle doctor` names them: for
-`host_layout = "qwerty"` and `layout = "colemak-dh"` it reports `43 unreachable
-characters (… é ç …) - no host keystroke produces them at their level, so lessons
-skip them`.
+## Quick start
 
-## Layouts and corpora are data files
-
-Bundled: `qwerty`, `azerty`, `colemak-dh`, `bepo`, `gallium` (`keytle layouts list`
-shows each id, name, and whether it is bundled or yours).
-
-Drop a layout at `~/.config/keytle/layouts/<id>.toml` to add one or to shadow a
-bundled one. It is a grid of keys plus the order its letters are taught:
-
-```toml
-id = "colemak-dh"
-name = "Colemak-DH (ANSI)"
-rows = 5
-row_offset = [0, 1, 1, 1, 2]
-
-[[key]]
-row = 2
-col = 0
-base = "a"
-shift = "A"
-altgr = "á"
-
-# ...one [[key]] per position...
-
-[unlock_order]
-en = ["e", "t", "a", "o", "i", "n", "s", "h", ...]   # frequency first, then by row
-fr = ["e", "s", "a", "i", "t", "n", "r", "u", ...]
-default = ["t", "n", "s", "e", "r", "i", "a", "o", ...]
+```sh
+nix run github:dbeley/keytle     # try it without installing
+cargo install --path keytle      # or build a checkout; Rust 1.85+
 ```
 
-A list is the whole teaching order, not an extra rung: it is walked from the
-first character to the last. The bundled lists start with the eight most common
-letters of the language the layout can type, then fall back on the layout's own
-home-row order and the remaining rows, so words form from the first lesson and
-posture still comes before the rare keys.
+Out of the box it teaches Colemak-DH emulated on your QWERTY keyboard, with
+English words, 20 words a lesson and an 80 wpm target. `enter` (or `space`)
+starts a lesson, `,` opens the settings, `s` the charts, `?` the help, `q` quits. It needs a
+terminal of at least 80×24 and nothing else.
 
-A `finger = "left-index"` line is still accepted in a layout file, but nothing
-draws it: the board shows keys, not hands.
+## How it learns
 
-`en` and `fr` corpora are compiled in, so it works out of the box: English words
-are the FrequencyWords list checked against a real dictionary, French words come
-from the Lexique 3.83 lexicon, and both keep their published frequencies. `keytle-core`
-can also merge `<dir>/<lang>/words.txt` (`word frequency` per line) and
-`<dir>/<lang>/sentences.txt` on top; the intended location is
-`~/.config/keytle/corpora/<lang>/`, which the TUI reads, so a file dropped there
-is used by the next lesson.
+- A fresh profile knows the first four letters of the teaching order for your
+  language, and a lesson only ever uses letters you have unlocked.
+- Every key keeps a confidence mixing speed and accuracy. A finished lesson
+  unlocks the next letter when the mean confidence of your unlocked keys reaches
+  **0.6** and no key sits below **90%** accuracy over its recent keystrokes.
+- There is no session cap and no unlock key: a typist who already knows the layout
+  can climb to their real level in one sitting, and nothing can hand out a letter
+  the lessons did not earn.
+- The letter standing between you and the next unlock shows up in more words than
+  its frequency alone would give it, so the drill works on what blocks it.
+- A finished lesson starts the next one by itself after three seconds. `esc` on
+  the results screen holds it while you read.
 
-## How learning works
+## Progress
 
-* A new profile starts with the first **four** letters of the teach order (`e t a
-  o` in English, whatever the layout); lessons use only unlocked letters.
-* Each key keeps a **confidence** in `0.0..=1.0` mixing speed and accuracy:
-  `0.6 * speed + 0.4 * accuracy`. Speed against your `target_wpm` carries more
-  weight because progression is about fluency; accuracy has a separate floor.
-* A lesson qualifies when the mean confidence of your unlocked, reachable keys
-  reaches **0.6** and no key sits below **0.90** accuracy. One more letter then
-  unlocks, and there is **no session cap**: a typist who already knows the layout
-  can climb to their real level in one sitting instead of three letters at a time.
-* Accuracy is a **moving average of the last ~20 keystrokes** on that key, not a
-  lifetime ratio. A letter that started with a few typos can therefore clear the
-  floor with a clean run, instead of carrying its early mistakes for ever.
-* The order walks the whole board: the language's most frequent letters first,
-  then the home row and the remaining rows key by key, then punctuation and (for
-  `fr`) the accented letters. Every unlock is automatic: there is no key that
-  skips ahead, so the profile can never hold a letter the lessons did not earn.
-* Letters are weighted by weakness, and a letter whose recent accuracy sits under
-  the floor gets a large extra share: the one thing standing between you and the
-  next unlock shows up in most words instead of once in a while.
-* Lessons are **real dictionary words** (`words` mode) unless the settings say
-  otherwise: the bundled lists are filtered against a real lexicon, so what you
-  type is English or French rather than generated text. `pseudo` still exists
-  for a drill that can use any letter on the first day, and `sentences` types
-  real prose once the alphabet is wide enough.
-* The home screen is the drill's front page: it shows the test count, latest
-  and best speed, consistency and the weakest keys, and every key that leads
-  somewhere (`s` stats, `,` settings, `?` help). A finished test starts the next
-  one by itself after three seconds - or as soon as you type - and `esc` on the
-  results holds it while you read.
+`s` opens the dashboard: speed and accuracy per test, the personal best, session
+breaks and unlocks, a per-key table, and what the next unlock is waiting for.
+`keytle stats` prints the same numbers as plain text.
+
+![the stats dashboard: speed per test, the per-key table, the next
+unlock](docs/screenshots/stats.png)
 
 ## Install
 
-```sh
-nix run github:<owner>/keytle      # try it without installing
-nix build                          # ./result/bin/keytle
-cargo install --path keytle        # from a checkout; Rust 1.85+
-```
+`nix build` puts the binary at `./result/bin/keytle`, `cargo install --path
+keytle` installs a checkout, and `nix run github:dbeley/keytle` runs it straight
+from the flake without installing anything.
 
 NixOS and home-manager modules are exported as `nixosModules.default` and
 `homeModules.default`, both under the same option path, `services.keytle`:
@@ -116,10 +63,15 @@ services.keytle = {
 };
 ```
 
+<details>
+<summary>Where those settings land</summary>
+
 `settings` is rendered to `config.toml` - `/etc/keytle/config.toml` on NixOS
 (with `KEYTLE_CONFIG_DIR` pointing there), `$XDG_CONFIG_HOME/keytle/config.toml`
 under home-manager. Every key is optional; unknown keys are rejected, so a typo
-fails loudly rather than being silently ignored.
+fails loudly instead of being silently ignored.
+
+</details>
 
 ## Usage
 
@@ -127,18 +79,40 @@ fails loudly rather than being silently ignored.
 | --- | --- |
 | `keytle`, `keytle run` | start the trainer |
 | `keytle stats [--layout L] [--lang L] [--mode M] [--last N]` | dashboard as plain text |
-| `keytle doctor` | paths, config, version, `TERM`, reachability |
+| `keytle doctor` | paths, config, version, `TERM`, and which characters your host board cannot type |
 | `keytle export [--format jsonl\|tsv] [-o PATH]` | raw records to stdout or a file |
 | `keytle layouts list` | layout ids with names and source |
 
-Keys: `enter`/`space` start a lesson, `esc` abort, `tab` restart, `s` stats, `?`
-help, `,` settings (an overlay over the typing view: layout, host layout,
-language, mode, emulation, strictness, lesson length, target speed and automatic
-next test), `m` merge modes, `c` chart mode; `q` quits. A settings edit applies
-the moment it is made, and leaving the panel with `esc` (or `w` while still in
-it) writes the file, so there is no unsaved state to lose.
-Progression has no key of its own: the engine unlocks the next letter when a
-lesson clears the gate, and nothing else can.
+**While typing:** `esc` abandons the lesson (nothing is recorded), `tab` restarts
+it, `q` quits when no lesson is running, and `ctrl-c` always quits. A wrong key
+does not advance the cursor until you press the right one, unless `strict` is off.
+
+**On the dashboard** (opened with `s`; `tab` or `esc` returns): `s`/`S` and `l` pick
+the layout and language, `a` includes every layout, `m` merges modes, `c` cycles
+the chart between speed, accuracy and both.
+
+**In the settings panel** (`,`): `j`/`k` move between rows and `h`/`l` change the
+value - layout, host layout, language, mode, emulation, strictness, lesson
+length, target speed and automatic next test. An edit applies the moment it is
+made, and leaving with `esc` (or `w` while still in it) writes the file, so there
+is no unsaved state to lose.
+
+Progression has no key of its own: only a lesson that clears the gate unlocks a
+letter.
+
+## Layouts and corpora
+
+Five layouts are compiled in - `qwerty`, `azerty`, `colemak-dh`, `bepo`,
+`gallium` - and `keytle layouts list` shows them with their source. A file at
+`~/.config/keytle/layouts/<id>.toml` adds your own, or shadows a bundled one:
+it is a grid of keys, their shift and altgr legends, and the order its letters
+are taught. Word lists work the same way in
+`~/.config/keytle/corpora/<lang>/words.txt`.
+
+- [docs/layouts.md](docs/layouts.md) - the layout file, the teaching order, host
+  layouts and unreachable characters
+- [docs/corpora.md](docs/corpora.md) - the bundled word lists, how to add your
+  own, and what each mode drills
 
 ## Where data lives
 
@@ -150,17 +124,16 @@ work on them.
                                     emulate, strict, lesson_words, target_wpm,
                                     auto_next
 ~/.config/keytle/layouts/*.toml     your layouts
+~/.config/keytle/corpora/<lang>/    your words.txt and sentences.txt
 ~/.local/share/keytle/tests.jsonl   one record per finished test
 ~/.local/share/keytle/profiles/     <layout>.<lang>.json - unlocked keys, evidence
 ```
 
-Defaults: Colemak-DH emulated on QWERTY, English, `words`, 20 words, 80 wpm,
-next test after 3 s of an untouched results screen (`auto_next`).
 `KEYTLE_CONFIG_DIR` / `KEYTLE_DATA_DIR` override the roots; otherwise the XDG
 variables, then `~/.config` / `~/.local/share`.
 
 ## License
 
-MIT OR Apache-2.0, at your option. Bundled corpora keep their own licences -
-FrequencyWords (CC-BY-SA 4.0, derived from OpenSubtitles) and Tatoeba (CC-BY 2.0
-FR) - with provenance in `keytle-core/src/data/corpora/NOTICE.md`.
+MIT. The bundled corpora keep their own licences - FrequencyWords and
+Lexique 3.83 (CC-BY-SA 4.0), Tatoeba (CC-BY 2.0 FR) - with provenance in
+[`keytle-core/src/data/corpora/NOTICE.md`](keytle-core/src/data/corpora/NOTICE.md).
