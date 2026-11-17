@@ -1,7 +1,7 @@
 # Third-party data in keytle
 
 The bundled corpora under `keytle-core/src/data/corpora/` are derived from the
-sources below. keytle itself is MIT OR Apache-2.0; the data files keep the
+sources below. keytle itself is MIT; the data files keep the
 licences of their sources.
 
 ## FrequencyWords - `en/words.txt` frequency order
